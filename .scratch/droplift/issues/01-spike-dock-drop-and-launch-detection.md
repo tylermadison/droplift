@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-human
+**Status:** resolved
 
 - [x] Cold-launch drop of 1 and of 12 files: all paths arrive, and no dashboard flashes
 - [x] Warm drop (app runs): all paths arrive
@@ -31,4 +31,9 @@
 
 - Check 2 (cold Dock drop, 12 files): **pass.** The log shows one `onOpenFiles` with `real: 12` at +204 ms and no dashboard. Human saw no window and no Dock icon flicker.
 - Check 4 (Open With) **failed** at first: `public.item` is a wildcard claim, and Finder hides wildcard apps from the Open With list. Fix: a second document type (Viewer, Alternate) with specific UTIs (`public.image public.movie public.audio com.adobe.pdf public.text public.archive public.zip-archive public.data`). After the fix, the app is in the list and the default openers did not change. Human confirmed in Finder. Branch `spike/m0` commit `c941550`, finding F9.
-- Still open: checks 3, 5, 6, 7 (warm Dock drop, Dock click cold and idle, park blink).
+- Check 3 (warm drop): **pass.** Log 17:38 UTC: a `.jpg` dropped into the running app arrives, no window. The folder + `.pdf` drop was a cold launch (17:37), also no window.
+- Check 5 (Dock click, app not running): **pass.** Log 17:39 UTC: `show-dashboard` at +402 ms. Human saw no blink.
+- Check 6 (Dock click when idle): **failure confirmed**, as expected. No tinyjs hook; nothing happens (F6).
+- Check 7 (park workaround): **partial.** Log 19:58 UTC: `park` at +1207 ms, window focused for about 27 ms, then a Dock click at +29.4 s shows the dashboard. Human saw a window flicker at the park, then the Dock click opened the window. So park meets D6 functionally but is visible.
+
+**Verdict:** all human checks done. D1, D2, D5 pass. D6 passes for a launch with no files; for a Dock click when idle, only the park workaround works, and it flickers. The follow-up is on ticket 21.

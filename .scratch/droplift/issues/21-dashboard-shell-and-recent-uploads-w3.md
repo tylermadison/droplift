@@ -17,3 +17,5 @@
 ## Comments
 
 **2026-09-24 · from spikes 01 and 03:** Start from the tinyjs `react-ts` template (ADR 0001) and switch views with a hash router or view state. D6: tinyjs has no Dock-click hook, so use the "park" workaround from ticket 01, and park again when the dashboard closes. If the human check in ticket 01 fails, record the gap here.
+
+**2026-09-24 · spike 01 check 7 result:** The park workaround works (a Dock click after park shows the dashboard), but the park call makes a visible window flicker. Idea to test in this ticket: park only when a window is already on screen (when the progress window closes after a Batch, or when the user closes the dashboard), so the park hides a window the user already sees and adds no extra flicker. The flicker stays only when the progress window setting is off. Also request an `onReopen` hook from tinyjs upstream.

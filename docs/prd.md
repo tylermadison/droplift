@@ -354,7 +354,7 @@ The row goes red with a short message and "Retry". The Dock badge shows "!" when
 | Risk / question | Impact | Mitigation |
 |---|---|---|
 | No "launched with files" flag in tinyjs | Dashboard can flash, or not show | 400 ms timer + `TinyjsActivation = accessory` patch (spike 01: pass). tinyjs sends its own `entry.js` to `onOpenFiles` on every launch; ignore paths inside the bundle. Ask tinyjs maintainer for a `launchedWithFiles` flag. |
-| No Dock-click (reopen) event in tinyjs (confirmed, spike 01) | Clicking the Dock icon does not open the dashboard when the app is already running | "Park" workaround (`show({activate:false})` + `hide()` in one tick), human check pending. No Dock menu API either, so no Dock-menu fallback. Request `onReopen` and a Dock menu API upstream. |
+| No Dock-click (reopen) event in tinyjs (confirmed, spike 01) | Clicking the Dock icon does not open the dashboard when the app is already running | "Park" workaround (`show({activate:false})` + `hide()` in one tick): a Dock click then works, but the park makes a visible window flicker (spike 01, human check). Park only when a window is already on screen (ticket 21). No Dock menu API either, so no Dock-menu fallback. Request `onReopen` and a Dock menu API upstream. |
 | No config for UTIs or extra binaries | Custom build script needed | §9.3 script; propose `extraBinaries` and `documentTypes` keys upstream. |
 | txiki.js child stdin bug | Engine IPC breaks if stdin is used | Unix socket IPC (§9.2). |
 | Next.js under `file://` | Broken assets / routing | Option A or B, fallback Vite (§9.4). |
