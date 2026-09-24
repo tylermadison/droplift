@@ -270,7 +270,7 @@ tinyjs has no config for an extra binary or for custom UTIs, and `copyTree` drop
 4. Copy `droplift-engine` into `Droplift.app/Contents/MacOS/` and `chmod +x`.
 5. Patch `Info.plist` (`tinyjs build` rewrites it, so patch after every build): `CFBundleDocumentTypes` with two types, both role `Viewer`, rank `Alternate`: (1) `[public.item, public.folder]`, (2) the specific UTIs from D2 so the app shows in Finder's Open With list; and `TinyjsActivation = accessory` (no `LSUIElement`) so the window stays hidden at launch (spike 01).
 6. `codesign --options runtime --timestamp` the engine, then the .app.
-7. `tinyjs notarize --dmg`.
+7. `tinyjs notarize --dmg` (only with a Developer ID). Without one, sign with the self-signed development certificate (or ad-hoc) and skip notarization; other Macs then need "Open Anyway" in Privacy & Security.
 8. Zip the stapled .app, compute sha256, write the auto-update manifest (`tinyjs publish` does not notarize, so do not use it for the final release).
 
 The host finds the engine at runtime next to `tjs.exePath`.

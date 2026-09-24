@@ -19,3 +19,5 @@
 ## Comments
 
 **2026-09-24:** Frontend is Vite + React from the tinyjs `react-ts` template (ADR 0001). Not Next.js.
+
+**2026-09-24 · Keychain and signing:** Keychain items remember the code signature of the app that made them. An ad-hoc signature changes on every build, so macOS asks for Keychain access again after each rebuild. For development, sign with the self-signed certificate "Droplift Dev" (made in Keychain Access, no Apple account). Tests must not need the real Keychain: put the secret store behind an interface with an in-memory fake.

@@ -4,13 +4,13 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-human
+**Status:** resolved
 
 - [x] Host listens on a socket in a private temp dir with mode 0600 and starts the Engine hidden with the socket path
 - [x] Engine connects and answers a ping; Host sends 100+ messages and all arrive
 - [x] Engine sends an event to the Host without a request
 - [x] Engine binary is universal (arm64 + amd64), stripped, and keeps its exec bit inside the .app
-- [ ] Engine and .app are signed with hardened runtime, and notarization passes
+- [x] Engine and .app are signed with hardened runtime (ad-hoc). Notarization moved to ticket 34.
 - [x] Host finds the Engine next to the Host executable at runtime
 - [x] A pass/fail note is written in the docs
 
@@ -24,3 +24,5 @@
 - Release order: `tinyjs build` (real identity) → copy the Engine + `chmod +x` → sign the Engine → sign the .app again → `tinyjs notarize --dmg`.
 
 **Remaining (human):** install a Developer ID Application certificate, `notarytool store-credentials`, then do the notarize steps in `NOTES.md`.
+
+**2026-09-24:** Resolved for development. There is no Developer ID now. Ad-hoc signing with hardened runtime works on this Mac (see the spike result). Notarization moves to ticket 34 and runs only when a Developer ID is present. For development, use a self-signed code-signing certificate so the signature stays the same across builds (see ticket 04).
