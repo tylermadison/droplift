@@ -10,7 +10,7 @@ openFiles Apple Event as a Dock drop, and `tools/winwatch` polls CGWindowList ev
 | 1 | Cold-launch drop of 1 and 12 files: all paths arrive, no dashboard flash | **PASS with patch** (variant `hidden`); **FAIL on stock tinyjs** |
 | 2 | Warm drop: all paths arrive | **PASS** |
 | 3 | Launch with no files: dashboard after the 400 ms timer | **PASS** (timer fires at 401–402 ms; window on screen 825–1003 ms after `open`) |
-| 4 | Dock click when idle | **FAIL natively**; workaround "park" passes automation, **needs human** eye check |
+| 4 | Dock click when idle | **FAIL natively**; workaround "park" works (a Dock click then shows the dashboard) but **flickers visibly** (human check 7) |
 | 5 | Info.plist `public.item` + `public.folder`, Viewer, Alternate: any type accepted, not default opener | **PASS after fix (F9).** `public.item` alone: drops work, but the app is missing from Finder's Open With list (human check 4 failed) |
 | 6 | Pass/fail note written | this file |
 
