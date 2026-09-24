@@ -87,7 +87,7 @@ Priority: **P0** = v1 must have, **P1** = v1 should have, **P2** = later.
 | ID | Requirement | Pri |
 |---|---|---|
 | D1 | Accept files dropped on the Dock icon and on the app icon in Finder, on cold launch and when the app runs. Use the tinyjs backend hook `onOpenFiles(paths, app)` (launch events are buffered until the app is ready). | P0 |
-| D2 | Accept any file type. The `Info.plist` must declare `LSItemContentTypes = public.item` with role **Viewer** and rank **Alternate**, so the app never becomes the default opener for `.jpg`, `.pdf`, etc. (tinyjs has no config key for this — see §9.3.) | P0 |
+| D2 | Accept any file type. The `Info.plist` must declare `LSItemContentTypes = public.item` with role **Viewer** and rank **Alternate**, so the app never becomes the default opener for `.jpg`, `.pdf`, etc. `public.item` is a wildcard claim, and Finder hides wildcard apps from the Open With list, so also declare a second type (Viewer, Alternate) with specific UTIs: `public.image`, `public.movie`, `public.audio`, `com.adobe.pdf`, `public.text`, `public.archive`, `public.zip-archive`, `public.data` (spike 01). (tinyjs has no config key for this — see §9.3.) | P0 |
 | D3 | Accept folders. Upload the folder contents recursively and keep the relative paths. Ask for confirmation when a folder has more than 500 files or more than 5 GB. | P1 |
 | D4 | Accept files dropped on the dashboard window (`tiny.win.onDrop`) and from a "Choose files…" button (`dialog.openFiles`). | P0 |
 | D5 | Launched with files → do not show the dashboard. Show only the progress window (or no window, if the user turned it off). | P0 |
@@ -268,7 +268,7 @@ tinyjs has no config for an extra binary or for custom UTIs, and `copyTree` drop
 2. `GOOS=darwin` build for arm64 + amd64 → `lipo` → `droplift-engine`.
 3. `tinyjs build`.
 4. Copy `droplift-engine` into `Droplift.app/Contents/MacOS/` and `chmod +x`.
-5. Patch `Info.plist` (`tinyjs build` rewrites it, so patch after every build): `CFBundleDocumentTypes` with `LSItemContentTypes = [public.item, public.folder]`, role `Viewer`, rank `Alternate`; and `TinyjsActivation = accessory` (no `LSUIElement`) so the window stays hidden at launch (spike 01).
+5. Patch `Info.plist` (`tinyjs build` rewrites it, so patch after every build): `CFBundleDocumentTypes` with two types, both role `Viewer`, rank `Alternate`: (1) `[public.item, public.folder]`, (2) the specific UTIs from D2 so the app shows in Finder's Open With list; and `TinyjsActivation = accessory` (no `LSUIElement`) so the window stays hidden at launch (spike 01).
 6. `codesign --options runtime --timestamp` the engine, then the .app.
 7. `tinyjs notarize --dmg`.
 8. Zip the stapled .app, compute sha256, write the auto-update manifest (`tinyjs publish` does not notarize, so do not use it for the final release).

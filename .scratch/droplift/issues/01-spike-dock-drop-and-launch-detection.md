@@ -26,3 +26,9 @@
 - tinyjs has no Dock menu API (see ticket 20).
 
 **Remaining (human):** the 5 manual checks in `NOTES.md` (real Dock drag, Open With list, Dock click cold and idle, park blink).
+
+**2026-09-24 · human checks, part 1**
+
+- Check 2 (cold Dock drop, 12 files): **pass.** The log shows one `onOpenFiles` with `real: 12` at +204 ms and no dashboard. Human saw no window and no Dock icon flicker.
+- Check 4 (Open With) **failed** at first: `public.item` is a wildcard claim, and Finder hides wildcard apps from the Open With list. Fix: a second document type (Viewer, Alternate) with specific UTIs (`public.image public.movie public.audio com.adobe.pdf public.text public.archive public.zip-archive public.data`). After the fix, the app is in the list and the default openers did not change. Human confirmed in Finder. Branch `spike/m0` commit `c941550`, finding F9.
+- Still open: checks 3, 5, 6, 7 (warm Dock drop, Dock click cold and idle, park blink).

@@ -17,3 +17,5 @@
 ## Comments
 
 **2026-09-24 · from spikes 01 and 02:** `tinyjs build` rewrites Info.plist, so patch it after every build (document types and `TinyjsActivation = accessory`). tinyjs signs only its own binaries. Order: build → copy the Engine + `chmod +x` → sign the Engine → sign the .app again → `tinyjs notarize --dmg` (it does not build again).
+
+**2026-09-24 · from spike 01 (F9):** The Info.plist patch needs two document types: `public.item` + `public.folder`, and a second type with specific UTIs so the app shows in Finder's Open With list. See PRD D2.
