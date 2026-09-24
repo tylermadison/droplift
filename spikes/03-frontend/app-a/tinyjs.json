@@ -1,0 +1,2 @@
+{ "name": "spike03a", "title": "Spike 03 A", "size": "900x700", "id": "dev.droplift.spike03a", "version": "0.0.1",
+  "frontend": { "dir": "fe" } }

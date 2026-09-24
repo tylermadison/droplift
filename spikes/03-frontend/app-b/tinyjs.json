@@ -1,0 +1,6 @@
+{ "name": "spike03b", "title": "Spike 03 B", "size": "900x700", "id": "dev.droplift.spike03b", "version": "0.0.1",
+  "frontend": { "dir": "fe" },
+  "api": { "origins": {
+    "file://*": ["siteUrl"],
+    "http://127.0.0.1:*": ["ping", "report"]
+  } } }

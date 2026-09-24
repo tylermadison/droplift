@@ -1,0 +1,13 @@
+{
+  "name": "spike03-web",
+  "private": true,
+  "scripts": { "build": "next build" },
+  "dependencies": {
+    "next": "16.3.6",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "echarts": "6.1.0",
+    "uplot": "1.6.32"
+  },
+  "devDependencies": { "typescript": "^5", "@types/react": "^19", "@types/node": "^22" }
+}

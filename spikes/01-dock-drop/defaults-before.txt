@@ -1,0 +1,5 @@
+public.jpeg -> com.apple.Preview
+com.adobe.pdf -> com.apple.Preview
+public.zip-archive -> com.apple.archiveutility
+public.folder -> com.apple.finder
+public.plain-text -> com.apple.TextEdit

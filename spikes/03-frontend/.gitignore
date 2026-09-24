@@ -1,0 +1,7 @@
+node_modules/
+web/.next/
+web/out/
+web/next-env.d.ts
+app-*/fe/
+app-*/dist/
+app-*/.build/

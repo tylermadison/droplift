@@ -1,0 +1,8 @@
+{
+  "name": "spike02",
+  "title": "Spike 02 — Engine sidecar (PROTOTYPE)",
+  "size": "720x480",
+  "id": "dev.droplift.spike02",
+  "version": "0.0.1",
+  "minTinyjsVersion": "0.41.1"
+}

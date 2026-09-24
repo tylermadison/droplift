@@ -1,0 +1,6 @@
+<!doctype html><meta charset="utf-8"><title>loading</title>
+<!-- PROTOTYPE — Option B bootstrap: file:// page that jumps to the loopback server -->
+<p>Loading…</p>
+<script>
+(async () => { const u = await tiny.api.call('siteUrl'); location.replace(u); })();
+</script>
