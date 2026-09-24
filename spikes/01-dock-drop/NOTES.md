@@ -65,6 +65,10 @@ scope of this ticket, but ticket 20 depends on it.
 
 ## Manual checks for the user (things automation cannot see)
 
+**The log** is the file `~/Library/Logs/droplift-spike-01.log`. The window stays hidden on a drop,
+so read the log in a second terminal: `tail -f ~/Library/Logs/droplift-spike-01.log`. Ignore the
+`onOpenFiles` line with `real: 0` and the path `entry.js` (F3).
+
 1. `./run.sh`, then open `app/dist/DropliftSpike01.app` once and select "Keep in Dock". Quit it.
 2. **Cold Dock drop:** drag 12 files from Finder onto the Dock icon. Expect: no window, no Dock
    icon flicker. Check the log: one `onOpenFiles` with `real: 12`.
