@@ -15,3 +15,7 @@
 - [ ] The dashboard page never receives secret values, only Account names and status
 - [ ] The setup screen shows the minimum IAM policy and recommends the `AbortIncompleteMultipartUpload` lifecycle rule
 - [ ] After save, the tip "Drag files onto the Droplift icon in your Dock to upload." shows
+
+## Comments
+
+**2026-09-24:** Frontend is Vite + React from the tinyjs `react-ts` template (ADR 0001). Not Next.js.

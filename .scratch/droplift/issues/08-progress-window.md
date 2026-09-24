@@ -11,3 +11,7 @@
 - [ ] Window closes 3 s after the Batch is done if there are no errors
 - [ ] Window is visible less than 500 ms after a cold-launch drop (measured)
 - [ ] All controls work with the keyboard and VoiceOver
+
+## Comments
+
+**2026-09-24 · from spike 03:** Select the progress window by `tiny.win.id` or give it its own HTML entry. A `#hash` page path does not load in a second window.

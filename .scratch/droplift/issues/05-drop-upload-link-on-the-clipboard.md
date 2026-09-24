@@ -14,3 +14,7 @@
 - [ ] Engine streams from disk and never loads a full file into memory
 - [ ] A drop on cold launch does not show the dashboard
 - [ ] Median drop-to-clipboard time for a 5 MB file is measured and recorded
+
+## Comments
+
+**2026-09-24 · from spike 01:** Use the launch shape from ticket 01: Info.plist `TinyjsActivation = accessory`, then `app.presence('normal')` in `init`. Ignore `onOpenFiles` paths inside the app bundle (tinyjs sends its own `entry.js` on every launch).

@@ -6,7 +6,7 @@
 | Author | Tyler Madison |
 | Date | 2026-09-24 |
 | Platform | macOS 14+ (Windows and Linux: later, tinyjs support is beta) |
-| Stack | tinyjs 0.41.1 (txiki.js 26.6.0 + system WebKit) · Go sidecar (upload engine) · Next.js 16.3 static export (dashboard) · Apache ECharts 6 + uPlot (charts) |
+| Stack | tinyjs 0.41.1 (txiki.js 26.6.0 + system WebKit) · Go sidecar (upload engine) · Vite + React (dashboard, ADR 0001) · Apache ECharts 6 + uPlot (charts) |
 
 "Droplift" is a working name.
 
@@ -93,7 +93,7 @@ Priority: **P0** = v1 must have, **P1** = v1 should have, **P2** = later.
 | D5 | Launched with files → do not show the dashboard. Show only the progress window (or no window, if the user turned it off). | P0 |
 | D6 | Launched with no files, or Dock icon clicked when the app is idle → show the dashboard. | P0 |
 | D7 | Modifier keys at drop time: ⌥ = show the destination picker; ⇧ = send to all "secondary" destinations. | P1 |
-| D8 | Dock menu (right-click the Dock icon): list of destinations, "Upload to… ▸", "Pause all", "Resume all", "Open dashboard". | P1 |
+| D8 | Dock menu (right-click the Dock icon): list of destinations, "Upload to… ▸", "Pause all", "Resume all", "Open dashboard". Moved to P2: tinyjs 0.41.1 has no Dock menu API (spike 01). | P2 |
 
 **Launch detection (D5/D6).** tinyjs gives no "launched with files" flag. The host starts with the main window hidden. If `onOpenFiles` does not fire within 400 ms after `init(app)`, the host shows the dashboard. Milestone 0 must test this and the Dock-click behavior (see §12).
 
@@ -264,11 +264,11 @@ Dashboard rules:
 ### 9.3 Build and release
 tinyjs has no config for an extra binary or for custom UTIs, and `copyTree` drops the exec bit. So the release needs a custom script:
 
-1. `next build` (static export) → `frontend/dist`.
+1. `vite build` → `frontend/dist` (ADR 0001).
 2. `GOOS=darwin` build for arm64 + amd64 → `lipo` → `droplift-engine`.
 3. `tinyjs build`.
 4. Copy `droplift-engine` into `Droplift.app/Contents/MacOS/` and `chmod +x`.
-5. Patch `Info.plist`: `CFBundleDocumentTypes` with `LSItemContentTypes = [public.item, public.folder]`, role `Viewer`, rank `Alternate`.
+5. Patch `Info.plist` (`tinyjs build` rewrites it, so patch after every build): `CFBundleDocumentTypes` with `LSItemContentTypes = [public.item, public.folder]`, role `Viewer`, rank `Alternate`; and `TinyjsActivation = accessory` (no `LSUIElement`) so the window stays hidden at launch (spike 01).
 6. `codesign --options runtime --timestamp` the engine, then the .app.
 7. `tinyjs notarize --dmg`.
 8. Zip the stapled .app, compute sha256, write the auto-update manifest (`tinyjs publish` does not notarize, so do not use it for the final release).
@@ -283,6 +283,8 @@ You asked for the latest Next.js if possible. The current stable release is **Ne
 - Every use of `window` or `tiny` goes in `useEffect` or a client-only component, because Next prerenders pages at build time.
 - **Problem:** the built app loads pages from `file://`, and Next.js writes absolute `/_next/...` asset paths, which break under `file://`.
 
+**Decision (M0, spike 03): Vite + React.** See `docs/adr/0001-dashboard-frontend-vite-react.md`. Both Next options below passed, but A is fragile and B adds a local port. The rest of this section is kept as history.
+
 Two ways to solve it (Milestone 0 picks one):
 
 | Option | How | Trade-off |
@@ -293,7 +295,7 @@ Two ways to solve it (Milestone 0 picks one):
 **Fallback:** if both options fail the Milestone 0 test, use Vite + React (`tinyjs new --template react-ts`), which is the path tinyjs documents. The research agents recommend Vite for this app because the dashboard does not use any Next.js server features. The React components and chart code are the same in both, so the switch costs little.
 
 ### 9.5 Charts
-- **Apache ECharts 6** (Apache-2.0), tree-shaken (~80–130 KB gzip): heatmap, calendar, treemap, sunburst, sankey, gauge, custom waterfall. Canvas renderer.
+- **Apache ECharts 6** (Apache-2.0), tree-shaken (measured in spike 03: ~180 KB gzip for core + one line chart; import ECharts through one module only, or chunks duplicate it): heatmap, calendar, treemap, sunburst, sankey, gauge, custom waterfall. Canvas renderer.
 - **uPlot** (MIT, ~20 KB gzip): live throughput and latency time series. Very low CPU and memory.
 - Do not use Recharts, Tremor, or shadcn charts: they are SVG-based, slow with streaming data, and have no calendar or heatmap.
 
@@ -351,8 +353,8 @@ The row goes red with a short message and "Retry". The Dock badge shows "!" when
 
 | Risk / question | Impact | Mitigation |
 |---|---|---|
-| No "launched with files" flag in tinyjs | Dashboard can flash, or not show | 400 ms timer; test in M0. Ask tinyjs maintainer for a `launchedWithFiles` flag. |
-| No Dock-click (reopen) event found in tinyjs | Clicking the Dock icon may not open the dashboard when the app is already running | Test in M0. Fallback: Dock menu "Open dashboard", or request an `onReopen` hook upstream. |
+| No "launched with files" flag in tinyjs | Dashboard can flash, or not show | 400 ms timer + `TinyjsActivation = accessory` patch (spike 01: pass). tinyjs sends its own `entry.js` to `onOpenFiles` on every launch; ignore paths inside the bundle. Ask tinyjs maintainer for a `launchedWithFiles` flag. |
+| No Dock-click (reopen) event in tinyjs (confirmed, spike 01) | Clicking the Dock icon does not open the dashboard when the app is already running | "Park" workaround (`show({activate:false})` + `hide()` in one tick), human check pending. No Dock menu API either, so no Dock-menu fallback. Request `onReopen` and a Dock menu API upstream. |
 | No config for UTIs or extra binaries | Custom build script needed | §9.3 script; propose `extraBinaries` and `documentTypes` keys upstream. |
 | txiki.js child stdin bug | Engine IPC breaks if stdin is used | Unix socket IPC (§9.2). |
 | Next.js under `file://` | Broken assets / routing | Option A or B, fallback Vite (§9.4). |
@@ -363,6 +365,7 @@ The row goes red with a short message and "Retry". The Dock badge shows "!" when
 | Windows/Linux support is beta in tinyjs | Not in v1 | macOS only in v1. |
 
 ## 14. Future (P2+)
+- Dock menu (D8), when tinyjs has a Dock menu API.
 - Menu-bar mode with a popover-style window.
 - More providers: Backblaze B2, Wasabi, MinIO (S3-compatible, cheap to add), Dropbox, OneDrive.
 - Image processing before upload (strip EXIF, resize, convert to WebP/AVIF).

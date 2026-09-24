@@ -13,3 +13,7 @@
 - [ ] Zip, sha256, and update manifest are written
 - [ ] The .app is less than 30 MB
 - [ ] The DMG installs and runs on a clean Mac
+
+## Comments
+
+**2026-09-24 · from spikes 01 and 02:** `tinyjs build` rewrites Info.plist, so patch it after every build (document types and `TinyjsActivation = accessory`). tinyjs signs only its own binaries. Order: build → copy the Engine + `chmod +x` → sign the Engine → sign the .app again → `tinyjs notarize --dmg` (it does not build again).

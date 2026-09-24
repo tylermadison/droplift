@@ -13,3 +13,7 @@
 - [ ] Mini speed sparkline uses uPlot
 - [ ] Light and dark mode follow the system setting
 - [ ] Table works with the keyboard and VoiceOver
+
+## Comments
+
+**2026-09-24 · from spikes 01 and 03:** Start from the tinyjs `react-ts` template (ADR 0001) and switch views with a hash router or view state. D6: tinyjs has no Dock-click hook, so use the "park" workaround from ticket 01, and park again when the dashboard closes. If the human check in ticket 01 fails, record the gap here.
