@@ -11,7 +11,7 @@ openFiles Apple Event as a Dock drop, and `tools/winwatch` polls CGWindowList ev
 | 2 | Warm drop: all paths arrive | **PASS** |
 | 3 | Launch with no files: dashboard after the 400 ms timer | **PASS** (timer fires at 401–402 ms; window on screen 825–1003 ms after `open`) |
 | 4 | Dock click when idle | **FAIL natively**; workaround "park" passes automation, **needs human** eye check |
-| 5 | Info.plist `public.item` + `public.folder`, Viewer, Alternate: any type accepted, not default opener | **PASS** |
+| 5 | Info.plist `public.item` + `public.folder`, Viewer, Alternate: any type accepted, not default opener | **PASS after fix (F9).** `public.item` alone: drops work, but the app is missing from Finder's Open With list (human check 4 failed) |
 | 6 | Pass/fail note written | this file |
 
 ## Findings
@@ -62,6 +62,14 @@ Better long-term: ask upstream for an `onReopen` hook (PRD §13).
 **F8. No Dock menu API.** No `dockMenu`/`applicationDockMenu` in the bridge, the docs, or the launcher.
 PRD D8 and the Dock-menu fallback for D6 are blocked without an upstream change. Outside the
 scope of this ticket, but ticket 20 depends on it.
+
+**F9. `public.item` is a wildcard claim, hidden from Open With.** Launch Services flags the app
+`wildcard` and leaves it out of `NSWorkspace.urlsForApplications(toOpen:)`, which is the list Finder
+uses (the app shows only under "Other…"). `open -a` and Dock drops still work. Fix in `run.sh`: a
+second document type, role Viewer, rank Alternate, with `public.image public.movie public.audio
+com.adobe.pdf public.text public.archive public.zip-archive public.data`. After the fix the app is in
+the list for .jpg, .pdf, .txt, and a no-type .bin, and the defaults did not change (Preview, Preview,
+TextEdit, Archive Utility).
 
 ## Manual checks for the user (things automation cannot see)
 

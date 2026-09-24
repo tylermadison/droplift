@@ -18,6 +18,17 @@ $PB -c "Add :CFBundleDocumentTypes array" \
     -c "Add :CFBundleDocumentTypes:0:LSItemContentTypes array" \
     -c "Add :CFBundleDocumentTypes:0:LSItemContentTypes:0 string public.item" \
     -c "Add :CFBundleDocumentTypes:0:LSItemContentTypes:1 string public.folder" "$PL"
+# public.item is a "wildcard" claim: Launch Services hides wildcard apps from Finder's
+# Open With list. A second type with specific UTIs puts the app in the list (still Alternate).
+$PB -c "Add :CFBundleDocumentTypes:1 dict" \
+    -c "Add :CFBundleDocumentTypes:1:CFBundleTypeName string Common files" \
+    -c "Add :CFBundleDocumentTypes:1:CFBundleTypeRole string Viewer" \
+    -c "Add :CFBundleDocumentTypes:1:LSHandlerRank string Alternate" \
+    -c "Add :CFBundleDocumentTypes:1:LSItemContentTypes array" "$PL"
+i=0
+for u in public.image public.movie public.audio com.adobe.pdf public.text public.archive public.zip-archive public.data; do
+  $PB -c "Add :CFBundleDocumentTypes:1:LSItemContentTypes:$i string $u" "$PL"; i=$((i+1))
+done
 if [ "$VARIANT" = hidden ]; then
   $PB -c "Add :TinyjsActivation string accessory" "$PL"
 fi
