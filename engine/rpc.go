@@ -10,11 +10,13 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"time"
 )
 
 // Options are the engine's system boundaries. Zero values mean the real ones.
 type Options struct {
 	HTTPClient *http.Client
+	Now        func() time.Time
 }
 
 type message struct {
@@ -91,6 +93,12 @@ func (s *session) dispatch(ctx context.Context, method string, params json.RawMe
 			return nil, err
 		}
 		return s.destTest(ctx, p), nil
+	case "upload.enqueue":
+		var p uploadParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		return s.upload(ctx, p)
 	case "aws.profiles":
 		return awsProfiles()
 	}
@@ -131,4 +139,11 @@ func (s *session) deliver(msg message) {
 	if ok {
 		reply <- msg
 	}
+}
+
+func (s *session) now() time.Time {
+	if s.opts.Now != nil {
+		return s.opts.Now()
+	}
+	return time.Now()
 }

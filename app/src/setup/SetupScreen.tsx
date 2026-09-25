@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Guidance } from './Guidance'
-import type { AwsProfile, DestinationDraft, DestinationSummary, HostApi } from '../host-api'
+import type { AwsProfile, DestinationDraft, DestinationSummary, HostApi, LinkChoice } from '../host-api'
 
 type Provider = DestinationDraft['provider']
 type CredentialKind = 'keys' | 'profile'
@@ -14,9 +14,17 @@ interface Fields {
   secretAccessKey: string
   profile: string
   publicBaseUrl: string
+  link: string
 }
 
-const empty: Fields = { name: '', bucket: '', region: '', accountId: '', accessKeyId: '', secretAccessKey: '', profile: '', publicBaseUrl: '' }
+const linkOptions: { value: string; label: string; link: LinkChoice }[] = [
+  { value: 'public', label: 'Public URL (needs the public base URL)', link: { type: 'public' } },
+  { value: 'presigned-3600', label: 'Presigned URL, 1 hour', link: { type: 'presigned', ttlSeconds: 3600 } },
+  { value: 'presigned-86400', label: 'Presigned URL, 1 day', link: { type: 'presigned', ttlSeconds: 86400 } },
+  { value: 'presigned-604800', label: 'Presigned URL, 7 days', link: { type: 'presigned', ttlSeconds: 604800 } },
+]
+
+const empty: Fields = { name: '', bucket: '', region: '', accountId: '', accessKeyId: '', secretAccessKey: '', profile: '', publicBaseUrl: '', link: 'presigned-3600' }
 
 function toDraft(provider: Provider, kind: CredentialKind, f: Fields): DestinationDraft {
   const useProfile = provider === 's3' && kind === 'profile'
@@ -27,6 +35,7 @@ function toDraft(provider: Provider, kind: CredentialKind, f: Fields): Destinati
     ...(provider === 's3' && !useProfile && f.region && { region: f.region }),
     ...(provider === 'r2' && { accountId: f.accountId }),
     ...(f.publicBaseUrl && { publicBaseUrl: f.publicBaseUrl }),
+    link: linkOptions.find((o) => o.value === f.link)!.link,
     credentials: useProfile
       ? { kind: 'profile', profile: f.profile }
       : { kind: 'keys', accessKeyId: f.accessKeyId, secretAccessKey: f.secretAccessKey },
@@ -123,6 +132,16 @@ export function SetupScreen({ host }: { host: HostApi }) {
         </>
       )}
       {field('publicBaseUrl', 'Public base URL (optional)', 'url')}
+      <label>
+        Link
+        <select value={fields.link} onChange={set('link')}>
+          {linkOptions.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      </label>
       <button type="button" onClick={runTest}>
         Test
       </button>

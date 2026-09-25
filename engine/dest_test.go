@@ -18,15 +18,18 @@ import (
 type fakeS3 struct {
 	mu       sync.Mutex
 	requests []*http.Request
+	bodies   []string
 	respond  func(*http.Request) *http.Response
 }
 
 func (f *fakeS3) RoundTrip(r *http.Request) (*http.Response, error) {
+	var body []byte
 	if r.Body != nil {
-		io.Copy(io.Discard, r.Body)
+		body, _ = io.ReadAll(r.Body)
 	}
 	f.mu.Lock()
 	f.requests = append(f.requests, r)
+	f.bodies = append(f.bodies, string(body))
 	f.mu.Unlock()
 	if f.respond != nil {
 		return f.respond(r), nil
@@ -47,11 +50,16 @@ type host struct {
 }
 
 func startEngine(t *testing.T, s3 *fakeS3) *host {
+	return startEngineWith(t, s3, Options{})
+}
+
+func startEngineWith(t *testing.T, s3 *fakeS3, opts Options) *host {
 	t.Helper()
 	engineSide, hostSide := net.Pipe()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(func() { cancel(); hostSide.Close() })
-	go Serve(ctx, engineSide, Options{HTTPClient: &http.Client{Transport: s3}})
+	opts.HTTPClient = &http.Client{Transport: s3}
+	go Serve(ctx, engineSide, opts)
 	return &host{t: t, enc: json.NewEncoder(hostSide), scan: bufio.NewScanner(hostSide), keys: map[string]map[string]string{}}
 }
 

@@ -31,3 +31,5 @@
 - Note: in tinyjs the page can call `tiny.app.secrets` directly. A6 holds because the page code never does, and `secretFor` is not in the page API.
 - Development build: `scripts/dev-build.sh` (signs with "Droplift Dev" when present).
 
+**2026-09-24 · correction:** The self-signed "Droplift Dev" certificate does **not** stop the Keychain dialog after a rebuild. It has no Team ID, and without a Team ID macOS ties Keychain access to the binary hash, which changes on every build. After each rebuild, the first secret read shows the dialog; click "Always Allow". A free "Apple Development" certificate (Apple ID, no paid program) has a Team ID and would stop this.
+

@@ -24,4 +24,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.38.1 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.43.1 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.51.1 // indirect
+	github.com/klauspost/cpuid/v2 v2.0.12 // indirect
+	github.com/zeebo/blake3 v0.2.4 // indirect
 )

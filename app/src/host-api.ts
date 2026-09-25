@@ -1,7 +1,7 @@
 // The page's view of the Host API. In the app it calls `tiny.api.call`; tests pass a fake.
-import type { DestinationDraft, DestinationSummary, TestResult } from '../backend/destinations'
+import type { DestinationDraft, DestinationSummary, LinkChoice, TestResult } from '../backend/destinations'
 
-export type { DestinationDraft, DestinationSummary, TestResult }
+export type { DestinationDraft, DestinationSummary, LinkChoice, TestResult }
 
 export interface AwsProfile {
   name: string

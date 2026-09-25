@@ -41,6 +41,9 @@ export type Credentials =
   | { kind: 'keys'; accessKeyId: string; secretAccessKey: string }
   | { kind: 'profile'; profile: string }
 
+/** How a Destination makes Links (PRD R6). A public Link needs `publicBaseUrl`. */
+export type LinkChoice = { type: 'public' } | { type: 'presigned'; ttlSeconds: 3600 | 86400 | 604800 }
+
 export interface DestinationDraft {
   provider: 's3' | 'r2'
   name: string
@@ -49,6 +52,21 @@ export interface DestinationDraft {
   accountId?: string
   credentials: Credentials
   publicBaseUrl?: string
+  /** Defaults to a presigned Link that lasts 1 hour. */
+  link?: LinkChoice
+}
+
+/** A Destination as the Engine needs it for an upload: settings and a Keychain reference, never the secret. */
+export interface UploadTarget {
+  destinationId: number
+  provider: 's3' | 'r2'
+  name: string
+  bucket: string
+  region?: string
+  accountId?: string
+  profile?: string
+  account?: string
+  link: { type: 'public'; baseUrl: string } | { type: 'presigned'; ttlSeconds: number }
 }
 
 export interface DestinationSummary {
@@ -90,6 +108,10 @@ function fingerprint(value: unknown): string {
 export function createDestinationsApi(deps: { db: Db; secrets: SecretStore; engine: EngineClient }) {
   const { db, engine } = deps
   db.exec(SCHEMA)
+  // Columns added after the first release of the table (ticket 05).
+  const columns = db.all<{ name: string }>('PRAGMA table_info(destinations)').map((c) => c.name)
+  if (!columns.includes('link_type')) db.exec("ALTER TABLE destinations ADD COLUMN link_type TEXT NOT NULL DEFAULT 'presigned'")
+  if (!columns.includes('link_ttl')) db.exec('ALTER TABLE destinations ADD COLUMN link_ttl INTEGER NOT NULL DEFAULT 3600')
   // Drafts that passed Test in this session. Save accepts only these exact drafts.
   const passed = new Set<string>()
   // Keys of drafts under Test. They are not in the Keychain until Save.
@@ -149,10 +171,53 @@ export function createDestinationsApi(deps: { db: Db; secrets: SecretStore; engi
       }
 
       const isFirst = db.all('SELECT id FROM destinations').length === 0
+      const link = draft.link ?? { type: 'presigned', ttlSeconds: 3600 }
       db.run(
-        'INSERT INTO destinations (account_id, name, provider, bucket, public_base_url, is_default) VALUES (?, ?, ?, ?, ?, ?)',
-        [account.id, draft.name, draft.provider, draft.bucket, draft.publicBaseUrl ?? null, isFirst ? 1 : 0],
+        `INSERT INTO destinations (account_id, name, provider, bucket, public_base_url, link_type, link_ttl, is_default)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          account.id,
+          draft.name,
+          draft.provider,
+          draft.bucket,
+          draft.publicBaseUrl ?? null,
+          link.type,
+          link.type === 'presigned' ? link.ttlSeconds : 3600,
+          isFirst ? 1 : 0,
+        ],
       )
+    },
+
+    /** The default destination for an upload, or null when there is none. */
+    async defaultForUpload(): Promise<UploadTarget | null> {
+      const [row] = db.all<{
+        id: number
+        name: string
+        provider: 's3' | 'r2'
+        bucket: string
+        public_base_url: string | null
+        link_type: 'public' | 'presigned'
+        link_ttl: number
+        keychain_ref: string | null
+        meta_json: string
+      }>(
+        `SELECT d.id, d.name, d.provider, d.bucket, d.public_base_url, d.link_type, d.link_ttl, a.keychain_ref, a.meta_json
+         FROM destinations d JOIN accounts a ON a.id = d.account_id WHERE d.is_default = 1`,
+      )
+      if (!row) return null
+      const meta = JSON.parse(row.meta_json) as { region?: string; accountId?: string; profile?: string }
+      return {
+        destinationId: row.id,
+        provider: row.provider,
+        name: row.name,
+        bucket: row.bucket,
+        ...meta,
+        account: row.keychain_ref ?? undefined,
+        link:
+          row.link_type === 'public' && row.public_base_url
+            ? { type: 'public', baseUrl: row.public_base_url }
+            : { type: 'presigned', ttlSeconds: row.link_ttl },
+      }
     },
 
     async listDestinations(): Promise<DestinationSummary[]> {

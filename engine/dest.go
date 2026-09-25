@@ -20,6 +20,9 @@ type destTestParams struct {
 	AccountID string `json:"accountId"`
 	Profile   string `json:"profile"`
 	Account   string `json:"account"`
+	// Used by upload.enqueue only.
+	KeyTemplate string     `json:"keyTemplate"`
+	Link        linkConfig `json:"link"`
 }
 
 type testResult struct {

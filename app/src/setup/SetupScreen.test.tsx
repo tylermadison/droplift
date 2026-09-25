@@ -38,6 +38,7 @@ describe('SetupScreen', () => {
         bucket: 'public-assets',
         accountId: '0123456789abcdef0123456789abcdef',
         credentials: { kind: 'keys', accessKeyId: 'AKIDEXAMPLE', secretAccessKey: 'wJalrXUtnFEMI/K7MDENG' },
+        link: { type: 'presigned', ttlSeconds: 3600 },
       },
     ])
   })
@@ -64,7 +65,13 @@ describe('SetupScreen S3', () => {
     await user.click(screen.getByRole('button', { name: 'Test' }))
 
     expect(tested).toEqual([
-      { provider: 's3', name: 'work', bucket: 'build-artifacts', credentials: { kind: 'profile', profile: 'sso-dev' } },
+      {
+        provider: 's3',
+        name: 'work',
+        bucket: 'build-artifacts',
+        credentials: { kind: 'profile', profile: 'sso-dev' },
+        link: { type: 'presigned', ttlSeconds: 3600 },
+      },
     ])
   })
 })
@@ -80,6 +87,20 @@ describe('SetupScreen public URL', () => {
     await user.click(screen.getByRole('button', { name: 'Test' }))
 
     expect(tested[0]).toEqual(expect.objectContaining({ publicBaseUrl: 'https://cdn.example.com' }))
+  })
+})
+
+describe('SetupScreen link type', () => {
+  test('the user can pick a presigned link that lasts 7 days', async () => {
+    const tested: DestinationDraft[] = []
+    render(<SetupScreen host={fakeHost({ testDestination: async (d) => (tested.push(d), { ok: true }) })} />)
+    const user = userEvent.setup()
+
+    await fillR2Form(user)
+    await user.selectOptions(screen.getByLabelText('Link'), 'Presigned URL, 7 days')
+    await user.click(screen.getByRole('button', { name: 'Test' }))
+
+    expect(tested[0]).toEqual(expect.objectContaining({ link: { type: 'presigned', ttlSeconds: 604800 } }))
   })
 })
 

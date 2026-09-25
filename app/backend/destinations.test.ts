@@ -1,25 +1,6 @@
-import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, test } from 'vitest'
-import { createDestinationsApi, type Db, type EngineClient, type SecretStore } from './destinations'
-
-function memoryDb(): Db {
-  const db = new DatabaseSync(':memory:')
-  return {
-    run: (sql, params = []) => void db.prepare(sql).run(...(params as never[])),
-    all: (sql, params = []) => db.prepare(sql).all(...(params as never[])) as never,
-    exec: (sql) => db.exec(sql),
-  }
-}
-
-function memorySecrets(): SecretStore & { values: Map<string, string> } {
-  const values = new Map<string, string>()
-  return {
-    values,
-    get: async (key) => values.get(key) ?? null,
-    set: async (key, value) => (values.set(key, value), true),
-    delete: async (key) => values.delete(key),
-  }
-}
+import { createDestinationsApi, type EngineClient } from './destinations'
+import { memoryDb, memorySecrets } from './test-fakes'
 
 function engineThatPasses(): EngineClient {
   return { testDestination: async () => ({ ok: true }) }
@@ -112,6 +93,26 @@ describe('destinations API', () => {
     await api.saveDestination(r2Draft)
 
     expect(await api.listDestinations()).toEqual([expect.objectContaining({ publicBaseUrl: 'https://cdn.example.com' })])
+  })
+
+  test('the saved link type decides the link for uploads', async () => {
+    const presigned = { ...r2Draft, link: { type: 'presigned' as const, ttlSeconds: 604800 as const } }
+    const api = createDestinationsApi({ db: memoryDb(), secrets: memorySecrets(), engine: engineThatPasses() })
+
+    await api.testDestination(presigned)
+    await api.saveDestination(presigned)
+
+    expect((await api.defaultForUpload())?.link).toEqual({ type: 'presigned', ttlSeconds: 604800 })
+  })
+
+  test('a public link uses the public base URL', async () => {
+    const pub = { ...r2Draft, link: { type: 'public' as const } }
+    const api = createDestinationsApi({ db: memoryDb(), secrets: memorySecrets(), engine: engineThatPasses() })
+
+    await api.testDestination(pub)
+    await api.saveDestination(pub)
+
+    expect((await api.defaultForUpload())?.link).toEqual({ type: 'public', baseUrl: 'https://cdn.example.com' })
   })
 
   test('save is refused when the destination was not tested', async () => {
