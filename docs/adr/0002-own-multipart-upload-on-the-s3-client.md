@@ -21,6 +21,7 @@ Rejected: the transfer manager (reasons above). A wrapper around it would fix th
 
 - PRD U1 is changed to name this approach.
 - Approximately 100 lines of our own code, with tests at `upload.enqueue` over a fake S3 (`engine/multipart_test.go`).
+- A failed Upload (a Part or the Complete call) aborts its multipart upload, so no Parts stay on the Destination. Ticket 11 replaces the abort with a saved upload ID and a resume.
 - Ticket 11 can resume: it gives a saved upload ID and the completed Part numbers, and sends only the missing Parts.
 - Ticket 10 (retry with backoff) can replace the SDK retryer for `UploadPart` without a fight with a library loop.
 - We do not get transfer manager improvements for free. Check the transfer manager again when it reaches v1 if these points change.

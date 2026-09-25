@@ -35,3 +35,9 @@
 - **RSS, 10 parallel Uploads of 50 MiB** (70 Parts, 0 retries, 110 s): peak 128.5 MB for all 3 processes together (launcher 90.4 MB, Host `tjs` 10.0 MB, Engine 28.7 MB). Limit: 150 MB.
 - Fix found in the real run: the Engine sent Part times in local time; they are now UTC, like the `uploads` table.
 - Finding: 6 old `uploads` rows stay `active` from earlier sessions where the app stopped during an Upload. Ticket 11 (resume) handles such rows.
+
+**2026-09-25 · code review** (Standards + Spec)
+
+- Fixed: a failed Upload did not abort its multipart upload, so the Parts stayed on R2 and cost money. Now a failed Part or a failed Complete calls `AbortMultipartUpload` (tests for both). Ticket 11 must replace the abort with a saved upload ID when it adds resume.
+- Fixed two test smells: the test copy of `partDoneEvent`, and `partsInFlight.now` (a count, not a clock) is now `inFlight`.
+- Left for later tickets: the Host does not send `partsPerFile` yet (ticket 33); `progress` has no `bps` and no `part` (PRD §9.2, since ticket 05); nothing stores the upload ID or the ETag/CRC32 of each Part (ticket 11); progress goes back during a Part retry, and failed Parts have no retry count (ticket 10). The other smells are optional (the duplicated progress throttle in `progress.go`, the 7 parameters of `uploadParts`).

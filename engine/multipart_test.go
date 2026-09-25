@@ -61,6 +61,8 @@ func requestKinds(s3 *fakeS3) []string {
 			kinds = append(kinds, "create")
 		case q.Has("partNumber"):
 			kinds = append(kinds, "part")
+		case q.Has("uploadId") && r.Method == http.MethodDelete:
+			kinds = append(kinds, "abort")
 		case q.Has("uploadId"):
 			kinds = append(kinds, "complete")
 		default:
@@ -114,13 +116,13 @@ func TestTheMultipartLimitIsExactly16MiB(t *testing.T) {
 // partsInFlight wraps a fake S3: each UploadPart waits until `release` Parts are in flight (or 200 ms pass),
 // and the highest number of Parts in flight is recorded.
 type partsInFlight struct {
-	next    *fakeS3
-	release int
-	mu      sync.Mutex
-	now     int
-	most    int
-	full    chan struct{}
-	closed  bool
+	next     *fakeS3
+	release  int
+	mu       sync.Mutex
+	inFlight int
+	most     int
+	full     chan struct{}
+	closed   bool
 }
 
 func (p *partsInFlight) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -128,9 +130,9 @@ func (p *partsInFlight) RoundTrip(r *http.Request) (*http.Response, error) {
 		return p.next.RoundTrip(r)
 	}
 	p.mu.Lock()
-	p.now++
-	p.most = max(p.most, p.now)
-	if p.now == p.release && !p.closed {
+	p.inFlight++
+	p.most = max(p.most, p.inFlight)
+	if p.inFlight == p.release && !p.closed {
 		p.closed = true
 		close(p.full)
 	}
@@ -142,7 +144,7 @@ func (p *partsInFlight) RoundTrip(r *http.Request) (*http.Response, error) {
 	}
 	res, err := p.next.RoundTrip(r)
 	p.mu.Lock()
-	p.now--
+	p.inFlight--
 	p.mu.Unlock()
 	return res, err
 }
@@ -215,25 +217,15 @@ func TestMultipartProgressIsTheSumOverThePartsAndEndsAtTheFullSize(t *testing.T)
 	}
 }
 
-type partDone struct {
-	ID         string    `json:"id"`
-	N          int       `json:"n"`
-	Size       int64     `json:"size"`
-	StartedAt  time.Time `json:"startedAt"`
-	FinishedAt time.Time `json:"finishedAt"`
-	Retries    int       `json:"retries"`
-	BPS        float64   `json:"bps"`
-}
-
-func partsDone(h *host) map[int]partDone {
+func partsDone(h *host) map[int]partDoneEvent {
 	var mu sync.Mutex
-	done := map[int]partDone{}
+	done := map[int]partDoneEvent{}
 	h.onNotify = func(method string, params json.RawMessage) {
 		if method == "part.done" {
-			var p partDone
+			var p partDoneEvent
 			json.Unmarshal(params, &p)
 			mu.Lock()
-			done[p.N] = p
+			done[int(p.N)] = p
 			mu.Unlock()
 		}
 	}
@@ -324,7 +316,7 @@ func TestTheHostCanSetThePartsPerFile(t *testing.T) {
 	}
 }
 
-func TestAFailedPartFailsTheUploadWithTheClearMessageAndStopsTheOtherParts(t *testing.T) {
+func TestAFailedPartFailsTheUploadWithTheClearMessageStopsTheOtherPartsAndAbortsTheMultipartUpload(t *testing.T) {
 	s3 := multipartS3()
 	answer := s3.respond
 	s3.respond = func(r *http.Request) *http.Response {
@@ -346,7 +338,29 @@ func TestAFailedPartFailsTheUploadWithTheClearMessageAndStopsTheOtherParts(t *te
 	if message != "personal cannot write to public-assets." {
 		t.Errorf("message = %q", message)
 	}
-	if kinds := fmt.Sprint(requestKinds(s3)); kinds != "[create part]" {
-		t.Errorf("requests = %s, want no more Parts and no complete after the failed Part", kinds)
+	if kinds := fmt.Sprint(requestKinds(s3)); kinds != "[abort create part]" {
+		t.Errorf("requests = %s, want no more Parts after the failed Part, and an abort instead of a complete", kinds)
+	}
+}
+
+func TestAFailedCompleteAbortsTheMultipartUpload(t *testing.T) {
+	s3 := multipartS3()
+	answer := s3.respond
+	s3.respond = func(r *http.Request) *http.Response {
+		if r.Method == http.MethodPost && r.URL.Query().Has("uploadId") {
+			body := "<Error><Code>InvalidPart</Code><Message>from the service</Message></Error>"
+			return &http.Response{StatusCode: 400, Header: http.Header{"Content-Type": {"application/xml"}},
+				Body: io.NopCloser(strings.NewReader(body)), Request: r}
+		}
+		return answer(r)
+	}
+	h := startEngineWith(t, s3, Options{Now: fixedNow})
+	h.keys["account.1"] = map[string]string{"accessKeyId": "AKIDEXAMPLE", "secretAccessKey": "wJalrXUtnFEMI/K7MDENG"}
+	path := writeFile(t, "video.mov", strings.Repeat("x", 20*mib))
+
+	h.callError("upload.enqueue", r2Upload(path, map[string]any{"type": "public", "baseUrl": "https://cdn.example.com"}))
+
+	if kinds := fmt.Sprint(requestKinds(s3)); kinds != "[abort complete create part part part]" {
+		t.Errorf("requests = %s, want an abort after the failed complete", kinds)
 	}
 }

@@ -15,6 +15,9 @@ import (
 // multipartThreshold is the file size from which an Upload goes in Parts (PRD U1).
 const multipartThreshold = 16 << 20
 
+// abortTimeout limits the clean-up call after a failed multipart upload.
+const abortTimeout = 10 * time.Second
+
 // defaultPartsPerFile is the most Parts of one file in flight at the same time, if the Host does not set it (PRD U4).
 const defaultPartsPerFile = 4
 
@@ -51,10 +54,18 @@ func (s *session) uploadParts(ctx context.Context, client *s3.Client, f io.Reade
 	if err != nil {
 		return "", "", err
 	}
+	// A failed Upload aborts its multipart upload, so no Parts stay on the Destination (ticket 11 will resume instead).
+	defer func() {
+		if err != nil {
+			abortCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), abortTimeout)
+			defer stop()
+			client.AbortMultipartUpload(abortCtx, &s3.AbortMultipartUploadInput{Bucket: &bucket, Key: &key, UploadId: created.UploadId})
+		}
+	}()
 	size := partSize(total)
 	count := int((total + size - 1) / size)
 	parts := make([]types.CompletedPart, count)
-	ctx, cancel := context.WithCancelCause(ctx)
+	partsCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	limit := p.PartsPerFile
 	if limit <= 0 {
@@ -64,7 +75,7 @@ func (s *session) uploadParts(ctx context.Context, client *s3.Client, f io.Reade
 	var wg sync.WaitGroup
 	for i := range count {
 		slots <- struct{}{}
-		if ctx.Err() != nil {
+		if partsCtx.Err() != nil {
 			break
 		}
 		wg.Add(1)
@@ -74,7 +85,7 @@ func (s *session) uploadParts(ctx context.Context, client *s3.Client, f io.Reade
 			length := min(size, total-start)
 			startedAt := s.now()
 			var attempts int
-			out, err := client.UploadPart(ctx, &s3.UploadPartInput{
+			out, err := client.UploadPart(partsCtx, &s3.UploadPartInput{
 				Bucket: &bucket, Key: &key, UploadId: created.UploadId, PartNumber: aws.Int32(n), ChecksumAlgorithm: types.ChecksumAlgorithmCrc32,
 				Body: &partReader{part: io.NewSectionReader(f, start, length), progress: progress}, ContentLength: aws.Int64(length),
 			}, countAttempts(&attempts))
@@ -89,7 +100,7 @@ func (s *session) uploadParts(ctx context.Context, client *s3.Client, f io.Reade
 		}()
 	}
 	wg.Wait()
-	if err := context.Cause(ctx); err != nil {
+	if err := context.Cause(partsCtx); err != nil {
 		return "", "", err
 	}
 	done, err := client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
