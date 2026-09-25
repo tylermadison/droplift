@@ -1,7 +1,9 @@
-// The Queue's live progress: Dock progress and badge, and `progress` pushes to the windows (PRD P1, P3, P4).
+// The Queue's live progress: Dock progress and badge, and `progress` pushes to the windows (PRD P1–P4).
 // Engine events come in often; the Queue applies them together at most every 100 ms.
 
 export const FLUSH_MS = 100
+/** The progress window closes this long after a Batch is done with no errors. */
+export const CLOSE_AFTER_MS = 3000
 
 export interface ProgressEvent {
   id: string
@@ -9,36 +11,81 @@ export interface ProgressEvent {
   total: number
 }
 
-interface Entry {
+export interface QueueFile {
+  id: string
+  name: string
+  provider: 's3' | 'r2'
+}
+
+/** One row of the progress window. */
+export interface ProgressRow extends QueueFile {
+  sent: number
+  total: number
+  bytesPerSecond: number
+  etaSeconds: number | null
+  state: 'active' | 'done' | 'failed'
+}
+
+interface Entry extends QueueFile {
   shown: number
   total: number
-  done: boolean
+  state: ProgressRow['state']
+  // For the speed: what was shown at the last flush, and when.
+  lastShown: number
+  lastAt: number
+  bytesPerSecond: number
 }
 
 export function createQueue(deps: {
   dock: { progress(value: number | null): void; badge(text: string): void }
   push(event: string, data: unknown): void
   setTimer(ms: number, fire: () => void): void
+  /** Milliseconds; for the speed. */
+  now?: () => number
+  /** The progress window (PRD P2, §10.2). */
+  window?: { show(): void; close(): void }
 }) {
+  const now = deps.now ?? Date.now
   const entries = new Map<string, Entry>()
   let scheduled = false
 
+  function row(e: Entry): ProgressRow {
+    const left = e.total - e.shown
+    return {
+      id: e.id,
+      name: e.name,
+      provider: e.provider,
+      sent: e.shown,
+      total: e.total,
+      bytesPerSecond: e.bytesPerSecond,
+      etaSeconds: e.state === 'active' && e.bytesPerSecond > 0 ? Math.ceil(left / e.bytesPerSecond) : null,
+      state: e.state,
+    }
+  }
+
   function flush() {
     scheduled = false
-    deps.push(
-      'progress',
-      [...entries].map(([id, e]) => ({ id, sent: e.shown, total: e.total, done: e.done })),
-    )
-    const active = [...entries.values()]
-    const remaining = active.filter((e) => !e.done).length
+    const t = now()
+    for (const e of entries.values()) {
+      if (t > e.lastAt) e.bytesPerSecond = ((e.shown - e.lastShown) * 1000) / (t - e.lastAt)
+      e.lastShown = e.shown
+      e.lastAt = t
+    }
+    deps.push('progress', [...entries.values()].map(row))
+
+    const all = [...entries.values()]
+    const remaining = all.filter((e) => e.state === 'active').length
     if (remaining === 0) {
+      const failed = all.some((e) => e.state === 'failed')
       entries.clear()
       deps.dock.progress(null)
       deps.dock.badge('')
+      // Close only when nothing failed and no new drop came in meanwhile.
+      if (!failed) deps.setTimer(CLOSE_AFTER_MS, () => entries.size === 0 && deps.window?.close())
       return
     }
-    const total = active.reduce((sum, e) => sum + e.total, 0)
-    const shown = active.reduce((sum, e) => sum + e.shown, 0)
+    const total = all.reduce((sum, e) => sum + e.total, 0)
+    const shown = all.reduce((sum, e) => sum + e.shown, 0)
     deps.dock.progress(total > 0 ? shown / total : 0)
     deps.dock.badge(String(remaining))
   }
@@ -50,8 +97,12 @@ export function createQueue(deps: {
   }
 
   return {
-    add(ids: string[]) {
-      for (const id of ids) entries.set(id, { shown: 0, total: 0, done: false })
+    add(files: QueueFile[]) {
+      deps.window?.show()
+      const t = now()
+      for (const f of files) {
+        entries.set(f.id, { ...f, shown: 0, total: 0, state: 'active', lastShown: 0, lastAt: t, bytesPerSecond: 0 })
+      }
       schedule()
     },
     progress(e: ProgressEvent) {
@@ -61,11 +112,11 @@ export function createQueue(deps: {
       entry.shown = Math.max(entry.shown, e.sent)
       schedule()
     },
-    finish(id: string) {
+    finish(id: string, ok = true) {
       const entry = entries.get(id)
       if (!entry) return
-      entry.done = true
-      entry.shown = entry.total
+      entry.state = ok ? 'done' : 'failed'
+      if (ok) entry.shown = entry.total
       schedule()
     },
   }

@@ -1,6 +1,8 @@
 // Drops, Batches, and Uploads (PRD D1, §10.2, P6). The Engine does the transfer; the Host keeps the record.
 import type { Db, UploadTarget } from './destinations'
+import { formatSize } from './format'
 import { withoutBundlePaths } from './launch'
+import type { QueueFile } from './queue'
 
 export interface UploadRequest {
   id: string
@@ -23,18 +25,6 @@ export interface Notice {
   title: string
   body: string
   actions: { id: 'copy' | 'open' | 'dashboard'; title: string }[]
-}
-
-/** Decimal units, as Finder shows them: 84 MB is 84,000,000 bytes. */
-function formatSize(bytes: number): string {
-  const units = ['B', 'kB', 'MB', 'GB', 'TB']
-  let value = bytes
-  let unit = 0
-  while (value >= 1000 && unit < units.length - 1) {
-    value /= 1000
-    unit++
-  }
-  return `${value >= 10 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`
 }
 
 export interface UploadEngine {
@@ -81,7 +71,7 @@ export function createUploads(deps: {
   clipboard: { writeText(text: string): void }
   bundlePath: string
   /** Live progress (Dock and windows). */
-  queue?: { add(ids: string[]): void; finish(id: string): void }
+  queue?: { add(files: QueueFile[]): void; finish(id: string, ok: boolean): void }
   notify?: (notice: Notice) => void
   /** Milliseconds; for the Batch duration. */
   now?: () => number
@@ -120,9 +110,17 @@ export function createUploads(deps: {
         return id
       })
 
-      deps.queue?.add(ids)
+      deps.queue?.add(ids.map((id, i) => ({ id, name: paths[i].split('/').pop()!, provider: destination.provider })))
       const results = await Promise.allSettled(
-        ids.map((id, i) => engine.enqueue({ id, path: paths[i], destination }).finally(() => deps.queue?.finish(id))),
+        ids.map((id, i) =>
+          engine.enqueue({ id, path: paths[i], destination }).then(
+            (done) => (deps.queue?.finish(id, true), done),
+            (err) => {
+              deps.queue?.finish(id, false)
+              throw err
+            },
+          ),
+        ),
       )
       const links: string[] = []
       results.forEach((r, i) => {

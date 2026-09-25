@@ -1,0 +1,86 @@
+/* Progress window (PRD P2): a compact list, light and dark. */
+:root {
+  --bg: #ffffff;
+  --text: #1d1d1f;
+  --muted: #6e6e73;
+  --track: #e5e5ea;
+  --fill: #0a84ff;
+  --failed: #d70015;
+  --done: #248a3d;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1c1e;
+    --text: #f5f5f7;
+    --muted: #a1a1a6;
+    --track: #3a3a3c;
+    --fill: #0a84ff;
+    --failed: #ff453a;
+    --done: #30d158;
+  }
+}
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 12px/1.4 -apple-system, BlinkMacSystemFont, sans-serif;
+  text-align: left;
+}
+#root {
+  /* Room for the close button of the frameless window. */
+  padding: 30px 12px 12px;
+}
+.uploads {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+.row {
+  display: grid;
+  gap: 4px;
+}
+.line {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  white-space: nowrap;
+}
+.name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+.provider {
+  font-size: 10px;
+  padding: 0 4px;
+  border-radius: 3px;
+  border: 1px solid var(--muted);
+  color: var(--muted);
+}
+.detail {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.state-done {
+  color: var(--done);
+}
+.state-failed {
+  color: var(--failed);
+}
+.bar {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--track);
+  overflow: hidden;
+}
+.fill {
+  height: 100%;
+  background: var(--fill);
+}
+.row[data-state='failed'] .fill {
+  background: var(--failed);
+}
