@@ -84,7 +84,7 @@ func (s *session) uploadParts(ctx context.Context, client *s3.Client, f io.Reade
 			}
 			parts[i] = types.CompletedPart{PartNumber: aws.Int32(n), ETag: out.ETag, ChecksumCRC32: out.ChecksumCRC32}
 			finishedAt := s.now()
-			s.notify("part.done", partDoneEvent{ID: id, N: n, Size: length, StartedAt: startedAt, FinishedAt: finishedAt,
+			s.notify("part.done", partDoneEvent{ID: id, N: n, Size: length, StartedAt: startedAt.UTC(), FinishedAt: finishedAt.UTC(),
 				Retries: attempts - 1, BPS: bytesPerSecond(length, finishedAt.Sub(startedAt))})
 		}()
 	}
