@@ -4,7 +4,7 @@
 
 **Blocked by:** 02 (Spike: Engine sidecar over a Unix socket), 03 (Spike: Dashboard frontend under file://)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [x] Empty state shows when there are no Destinations
 - [x] S3 form accepts access keys or a named profile from the AWS config (including SSO)

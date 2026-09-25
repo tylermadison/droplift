@@ -163,7 +163,7 @@ Priority: **P0** = v1 must have, **P1** = v1 should have, **P2** = later.
 | ID | Requirement | Pri |
 |---|---|---|
 | A1 | All secrets go in the macOS Keychain with `app.secrets` (one item per account). Never in plain files, logs, argv, or environment variables. | P0 |
-| A2 | S3: support access keys, and named profiles from `~/.aws/config` including SSO (IAM Identity Center). Show the minimum IAM policy: `s3:PutObject`, `s3:AbortMultipartUpload`, `s3:ListBucket`, `s3:ListMultipartUploadParts`, `s3:GetObject` (presign/HEAD), `cloudwatch:GetMetricData` (dashboard). | P0 |
+| A2 | S3: support access keys, and named profiles from `~/.aws/config` including SSO (IAM Identity Center). Show the minimum IAM policy: `s3:PutObject`, `s3:DeleteObject` (the Test object, and delete from history), `s3:AbortMultipartUpload`, `s3:ListBucket`, `s3:ListMultipartUploadParts`, `s3:GetObject` (presign/HEAD), `cloudwatch:GetMetricData` (dashboard). | P0 |
 | A3 | R2: S3-compatible API token + account ID. Optional second Cloudflare API token with **Account Analytics: Read** for dashboard metrics. | P0 |
 | A4 | Google Drive: OAuth 2.0 "Desktop app" client, loopback redirect `http://127.0.0.1:<random port>`, PKCE S256. Scope `drive.file` only (non-sensitive; no CASA assessment). Publish the OAuth app to "In production" (in "Testing", refresh tokens expire after 7 days). | P0 |
 | A5 | The host reads secrets from the Keychain and gives them to the engine over the private socket, only when the engine needs them. | P0 |
