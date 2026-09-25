@@ -41,6 +41,22 @@ export interface UploadSummary {
   error: string | null
 }
 
+/** One uploaded Part of a multipart Upload (PRD §9.6). */
+export interface Part {
+  n: number
+  size: number
+  startedAt: string
+  finishedAt: string
+  retries: number
+  /** Bytes per second. */
+  bps: number
+}
+
+/** The Engine's `part.done` event (PRD §9.2). */
+export interface PartDone extends Part {
+  id: string
+}
+
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS batches (
     id INTEGER PRIMARY KEY,
@@ -62,7 +78,36 @@ const SCHEMA = `
     error_msg TEXT,
     started_at TEXT NOT NULL,
     finished_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS parts (
+    upload_id TEXT NOT NULL,
+    n INTEGER NOT NULL,
+    size INTEGER NOT NULL,
+    started_at TEXT NOT NULL,
+    finished_at TEXT NOT NULL,
+    retries INTEGER NOT NULL,
+    bps REAL NOT NULL,
+    PRIMARY KEY (upload_id, n)
   )`
+
+export const FILES_AT_ONCE = 3
+
+/** Runs at most `max` tasks at the same time; the others wait in order. */
+function limiter(max: number) {
+  let running = 0
+  const waiting: (() => void)[] = []
+  return async <T>(task: () => Promise<T>): Promise<T> => {
+    if (running >= max) await new Promise<void>((r) => waiting.push(r))
+    else running++
+    try {
+      return await task()
+    } finally {
+      const next = waiting.shift()
+      if (next) next()
+      else running--
+    }
+  }
+}
 
 export function createUploads(deps: {
   db: Db
@@ -77,8 +122,11 @@ export function createUploads(deps: {
   now?: () => number
   openUrl?: (url: string) => void
   showDashboard?: () => void
+  /** The most files that upload at the same time, over all Drops (PRD U4). */
+  filesAtOnce?: number
 }) {
   const clock = deps.now ?? Date.now
+  const turn = limiter(deps.filesAtOnce ?? FILES_AT_ONCE)
   const { db, engine } = deps
   db.exec(SCHEMA)
   // Column added after the table first shipped to a development database.
@@ -113,7 +161,7 @@ export function createUploads(deps: {
       deps.queue?.add(ids.map((id, i) => ({ id, name: paths[i].split('/').pop()!, provider: destination.provider })))
       const results = await Promise.allSettled(
         ids.map((id, i) =>
-          engine.enqueue({ id, path: paths[i], destination }).then(
+          turn(() => engine.enqueue({ id, path: paths[i], destination })).then(
             (done) => (deps.queue?.finish(id, true), done),
             (err) => {
               deps.queue?.finish(id, false)
@@ -165,6 +213,23 @@ export function createUploads(deps: {
       if (info.action === 'copy') deps.clipboard.writeText(links.join('\n'))
       if (info.action === 'open') links.forEach((link) => deps.openUrl?.(link))
       if (info.action === 'dashboard') deps.showDashboard?.()
+    },
+
+    /** The Engine finished one Part of a multipart Upload. */
+    partDone(p: PartDone): void {
+      db.run(
+        `INSERT OR REPLACE INTO parts (upload_id, n, size, started_at, finished_at, retries, bps) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [p.id, p.n, p.size, p.startedAt, p.finishedAt, p.retries, p.bps],
+      )
+    },
+
+    async listParts(uploadId: string): Promise<Part[]> {
+      return db
+        .all<{ n: number; size: number; started_at: string; finished_at: string; retries: number; bps: number }>(
+          'SELECT n, size, started_at, finished_at, retries, bps FROM parts WHERE upload_id = ? ORDER BY n',
+          [uploadId],
+        )
+        .map((r) => ({ n: r.n, size: r.size, startedAt: r.started_at, finishedAt: r.finished_at, retries: r.retries, bps: r.bps }))
     },
 
     async listUploads(): Promise<UploadSummary[]> {

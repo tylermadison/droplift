@@ -4,7 +4,7 @@ import { startEngine, type EngineConnection } from './engine'
 import { createLaunch, withoutBundlePaths } from './launch'
 import { createQueue, type ProgressEvent } from './queue'
 import { openDb } from './sqlite'
-import { createUploads, type UploadDone } from './uploads'
+import { createUploads, type UploadDone, type PartDone } from './uploads'
 
 let destinations: ReturnType<typeof createDestinationsApi> | undefined
 let uploads: ReturnType<typeof createUploads> | undefined
@@ -41,6 +41,7 @@ export async function init(app: TinyApp) {
   engine = await startEngine(async (method, params) => {
     if (method === 'secret.request') return destinations!.secretFor(params?.account)
     if (method === 'progress') return queue.progress(params as ProgressEvent)
+    if (method === 'part.done') return uploads?.partDone(params as PartDone)
     throw new Error(`unknown method ${method}`)
   })
   const db = await openDb(app)

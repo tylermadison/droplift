@@ -27,6 +27,8 @@ type uploadParams struct {
 	ID          string         `json:"id"`
 	Path        string         `json:"path"`
 	Destination destTestParams `json:"destination"`
+	// PartsPerFile is the most Parts in flight for a multipart Upload; 0 means the default.
+	PartsPerFile int `json:"partsPerFile"`
 }
 
 type uploadResult struct {
@@ -38,7 +40,7 @@ type uploadResult struct {
 	Size     int64  `json:"size"`
 }
 
-// upload sends one file to one Destination with a single PUT, streamed from disk (PRD U1, U10, R5, R6).
+// upload sends one file to one Destination, streamed from disk: a single PUT below 16 MiB, multipart above (PRD U1, U10, R5, R6).
 func (s *session) upload(ctx context.Context, p uploadParams) (uploadResult, error) {
 	d := p.Destination
 	f, err := os.Open(p.Path)
@@ -77,10 +79,19 @@ func (s *session) upload(ctx context.Context, p uploadParams) (uploadResult, err
 	}
 	total := info.Size()
 	report := func(sent int64) { s.notify("progress", progressEvent{ID: p.ID, Sent: min(sent, total), Total: total}) }
-	body := &countingReader{file: f, total: total, report: report, now: s.now}
-	out, err := client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket: &d.Bucket, Key: &key, Body: body, ContentLength: aws.Int64(total),
-	})
+	var etag, checksum string
+	if total >= multipartThreshold {
+		etag, checksum, err = s.uploadParts(ctx, client, f, p, key, total, &partsProgress{report: report, now: s.now})
+	} else {
+		body := &countingReader{file: f, total: total, report: report, now: s.now}
+		var out *s3.PutObjectOutput
+		out, err = client.PutObject(ctx, &s3.PutObjectInput{
+			Bucket: &d.Bucket, Key: &key, Body: body, ContentLength: aws.Int64(total),
+		})
+		if err == nil {
+			etag, checksum = aws.ToString(out.ETag), firstNonEmpty(out.ChecksumCRC64NVME, out.ChecksumCRC32, out.ChecksumCRC32C)
+		}
+	}
 	if err != nil {
 		return uploadResult{}, fmt.Errorf("%s", clearMessage(err, d))
 	}
@@ -93,8 +104,8 @@ func (s *session) upload(ctx context.Context, p uploadParams) (uploadResult, err
 	return uploadResult{
 		ID:       p.ID,
 		Key:      key,
-		ETag:     strings.Trim(aws.ToString(out.ETag), `"`),
-		Checksum: firstNonEmpty(out.ChecksumCRC64NVME, out.ChecksumCRC32, out.ChecksumCRC32C),
+		ETag:     strings.Trim(etag, `"`),
+		Checksum: checksum,
 		Link:     link,
 		Size:     total,
 	}, nil

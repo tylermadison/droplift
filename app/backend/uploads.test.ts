@@ -135,6 +135,79 @@ describe('drop', () => {
   })
 })
 
+describe('concurrency', () => {
+  /** An engine that holds each file until the test releases it, and counts the files in flight. */
+  function heldEngine() {
+    const held: (() => void)[] = []
+    const engine = {
+      inFlight: 0,
+      most: 0,
+      async enqueue(req: Parameters<UploadEngine['enqueue']>[0]) {
+        engine.inFlight++
+        engine.most = Math.max(engine.most, engine.inFlight)
+        await new Promise<void>((r) => held.push(r))
+        engine.inFlight--
+        return instantEngine.enqueue(req)
+      },
+      /** Lets the files in flight finish, one turn at a time, until the drop is done. */
+      async releaseAll(done: Promise<void>) {
+        let finished = false
+        done.then(() => (finished = true))
+        while (!finished) {
+          held.splice(0).forEach((r) => r())
+          await new Promise((r) => setTimeout(r, 0))
+        }
+      },
+    }
+    return engine
+  }
+
+  test('at most 3 files upload at the same time, and the others wait their turn', async () => {
+    const engine = heldEngine()
+    const { uploads } = await setup(engine)
+    const paths = ['a', 'b', 'c', 'd', 'e'].map((n) => `/Users/me/Desktop/${n}.png`)
+
+    const dropping = uploads.drop(paths)
+    await engine.releaseAll(dropping)
+
+    expect(engine.most).toBe(3)
+    expect((await uploads.listUploads()).map((u) => u.state)).toEqual(['done', 'done', 'done', 'done', 'done'])
+  })
+
+  test('the limit of 3 files is for all drops together', async () => {
+    const engine = heldEngine()
+    const { uploads } = await setup(engine)
+
+    const first = uploads.drop(['/Users/me/Desktop/a.png', '/Users/me/Desktop/b.png'])
+    const second = uploads.drop(['/Users/me/Desktop/c.png', '/Users/me/Desktop/d.png'])
+    await engine.releaseAll(Promise.all([first, second]).then(() => {}))
+
+    expect(engine.most).toBe(3)
+  })
+})
+
+describe('parts', () => {
+  test('each part.done from the Engine is kept as a Part of its Upload', async () => {
+    let uploads!: Awaited<ReturnType<typeof setup>>['uploads']
+    const engine: UploadEngine = {
+      async enqueue(req) {
+        uploads.partDone({ id: req.id, n: 2, size: 4_194_304, startedAt: '2026-09-24T21:00:00.500Z', finishedAt: '2026-09-24T21:00:01.500Z', retries: 1, bps: 4_194_304 })
+        uploads.partDone({ id: req.id, n: 1, size: 8_388_608, startedAt: '2026-09-24T21:00:00Z', finishedAt: '2026-09-24T21:00:02Z', retries: 0, bps: 4_194_304 })
+        return instantEngine.enqueue(req)
+      },
+    }
+    ;({ uploads } = await setup(engine))
+
+    await uploads.drop(['/Users/me/Desktop/video.mov'])
+    const [upload] = await uploads.listUploads()
+
+    expect(await uploads.listParts(upload.id)).toEqual([
+      { n: 1, size: 8_388_608, startedAt: '2026-09-24T21:00:00Z', finishedAt: '2026-09-24T21:00:02Z', retries: 0, bps: 4_194_304 },
+      { n: 2, size: 4_194_304, startedAt: '2026-09-24T21:00:00.500Z', finishedAt: '2026-09-24T21:00:01.500Z', retries: 1, bps: 4_194_304 },
+    ])
+  })
+})
+
 describe('batch notification', () => {
   test('a finished batch sends one notification with count, size, duration, and 3 actions', async () => {
     const times = [0, 6200]

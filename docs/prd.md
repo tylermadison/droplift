@@ -112,7 +112,7 @@ Priority: **P0** = v1 must have, **P1** = v1 should have, **P2** = later.
 
 | ID | Requirement | Pri |
 |---|---|---|
-| U1 | S3 and R2: use `aws-sdk-go-v2` `feature/s3/transfermanager`. Single PUT below 16 MiB, multipart above. Part size = `max(8 MiB, ceil(size / 10000))`. | P0 |
+| U1 | S3 and R2: use `aws-sdk-go-v2` `service/s3`, with our own multipart on `CreateMultipartUpload` / `UploadPart` / `CompleteMultipartUpload` that streams each Part from the file (ADR 0002). Single PUT below 16 MiB, multipart above. Part size = `max(8 MiB, ceil(size / 10000))`. | P0 |
 | U2 | R2 specifics: endpoint `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`, region `auto`, all parts except the last must be the same size, checksum mode `WHEN_REQUIRED` if R2 refuses the SDK default. | P0 |
 | U3 | Google Drive: resumable upload (`uploadType=resumable`) with `google.golang.org/api/drive/v3`. Chunk size 16 MiB (a multiple of 256 KiB). On failure, query the offset with `Content-Range: bytes */TOTAL` and continue. On 404, start a new session. | P0 |
 | U4 | Concurrency: max 3 files at the same time, max 4 parts per file (configurable). | P0 |

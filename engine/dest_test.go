@@ -70,6 +70,29 @@ func startEngineWith(t *testing.T, s3 *fakeS3, opts Options) *host {
 // call sends one request and returns its result, answering any secret.request on the way.
 func (h *host) call(method string, params any) json.RawMessage {
 	h.t.Helper()
+	result, err := h.roundTrip(method, params)
+	if err != nil {
+		h.t.Fatalf("engine error: %s", err)
+	}
+	return result
+}
+
+// callError sends one request that must fail, and returns the error message.
+func (h *host) callError(method string, params any) string {
+	h.t.Helper()
+	result, err := h.roundTrip(method, params)
+	if err == nil {
+		h.t.Fatalf("result = %s, want an error", result)
+	}
+	var e struct {
+		Message string `json:"message"`
+	}
+	json.Unmarshal(err, &e)
+	return e.Message
+}
+
+func (h *host) roundTrip(method string, params any) (result, err json.RawMessage) {
+	h.t.Helper()
 	if err := h.enc.Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params}); err != nil {
 		h.t.Fatal(err)
 	}
@@ -99,13 +122,10 @@ func (h *host) call(method string, params any) json.RawMessage {
 			}
 			continue
 		}
-		if msg.Error != nil {
-			h.t.Fatalf("engine error: %s", msg.Error)
-		}
-		return msg.Result
+		return msg.Result, msg.Error
 	}
 	h.t.Fatal("no reply from engine")
-	return nil
+	return nil, nil
 }
 
 func TestR2DestTestPutsAndDeletesOnTheR2EndpointWithRegionAuto(t *testing.T) {
