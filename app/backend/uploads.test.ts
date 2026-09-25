@@ -24,6 +24,7 @@ const instantEngine: UploadEngine = {
     checksum: 'crc',
     link: 'https://cdn.example.com/' + req.path.split('/').pop(),
     size: 42_000_000,
+    retries: 0,
   }),
 }
 
@@ -183,6 +184,28 @@ describe('concurrency', () => {
     await engine.releaseAll(Promise.all([first, second]).then(() => {}))
 
     expect(engine.most).toBe(3)
+  })
+})
+
+describe('retries', () => {
+  test('an Upload keeps the retry count that the Engine gives', async () => {
+    const { uploads } = await setup({ enqueue: async (req) => ({ ...(await instantEngine.enqueue(req)), retries: 3 }) })
+
+    await uploads.drop(['/Users/me/Desktop/video.mov'])
+
+    expect((await uploads.listUploads()).map((u) => u.retries)).toEqual([3])
+  })
+
+  test('a failed Upload keeps the retry count from the Engine error', async () => {
+    const { uploads } = await setup({
+      enqueue: async () => {
+        throw Object.assign(new Error('The service is not available.'), { data: { retries: 7 } })
+      },
+    })
+
+    await uploads.drop(['/Users/me/Desktop/video.mov'])
+
+    expect((await uploads.listUploads()).map((u) => [u.state, u.retries])).toEqual([['failed', 7]])
   })
 })
 

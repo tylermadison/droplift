@@ -71,6 +71,8 @@ func (s *session) s3Client(ctx context.Context, p destTestParams) (*s3.Client, e
 // providerOptions sets the endpoint and region for the provider (PRD U2 for R2).
 func (s *session) providerOptions(p destTestParams) func(*s3.Options) {
 	return func(o *s3.Options) {
+		// The Engine does its own retries (retry.go), so the SDK tries each call once.
+		o.Retryer = aws.NopRetryer{}
 		if s.opts.HTTPClient != nil {
 			o.HTTPClient = s.opts.HTTPClient
 		}

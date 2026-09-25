@@ -38,6 +38,8 @@ type uploadResult struct {
 	Checksum string `json:"checksum"`
 	Link     string `json:"link"`
 	Size     int64  `json:"size"`
+	// Retries is the number of retries over all calls of this Upload (ticket 10).
+	Retries int `json:"retries"`
 }
 
 // upload sends one file to one Destination, streamed from disk: a single PUT below 16 MiB, multipart above (PRD U1, U10, R5, R6).
@@ -78,22 +80,34 @@ func (s *session) upload(ctx context.Context, p uploadParams) (uploadResult, err
 		return uploadResult{}, err
 	}
 	total := info.Size()
-	report := func(sent int64) { s.notify("progress", progressEvent{ID: p.ID, Sent: min(sent, total), Total: total}) }
+	// A retry rewinds the body; the Host still sees the highest value, so progress never goes back (PRD P3).
+	var shown int64
+	report := func(sent int64) {
+		shown = max(shown, min(sent, total))
+		s.notify("progress", progressEvent{ID: p.ID, Sent: shown, Total: total})
+	}
 	var etag, checksum string
+	var retries int
 	if total >= multipartThreshold {
-		etag, checksum, err = s.uploadParts(ctx, client, f, p, key, total, &partsProgress{report: report, now: s.now})
+		etag, checksum, retries, err = s.uploadParts(ctx, client, f, p, key, total, &partsProgress{report: report, now: s.now})
 	} else {
 		body := &countingReader{file: f, total: total, report: report, now: s.now}
 		var out *s3.PutObjectOutput
-		out, err = client.PutObject(ctx, &s3.PutObjectInput{
-			Bucket: &d.Bucket, Key: &key, Body: body, ContentLength: aws.Int64(total),
+		retries, err = s.retry(ctx, func() (err error) {
+			if _, err := body.Seek(0, io.SeekStart); err != nil {
+				return err
+			}
+			out, err = client.PutObject(ctx, &s3.PutObjectInput{
+				Bucket: &d.Bucket, Key: &key, Body: body, ContentLength: aws.Int64(total),
+			})
+			return err
 		})
 		if err == nil {
 			etag, checksum = aws.ToString(out.ETag), firstNonEmpty(out.ChecksumCRC64NVME, out.ChecksumCRC32, out.ChecksumCRC32C)
 		}
 	}
 	if err != nil {
-		return uploadResult{}, fmt.Errorf("%s", clearMessage(err, d))
+		return uploadResult{}, &uploadError{message: clearMessage(err, d), retries: retries}
 	}
 	report(total)
 
@@ -108,6 +122,7 @@ func (s *session) upload(ctx context.Context, p uploadParams) (uploadResult, err
 		Checksum: checksum,
 		Link:     link,
 		Size:     total,
+		Retries:  retries,
 	}, nil
 }
 

@@ -56,7 +56,8 @@ export async function startEngine(onRequest: Handler): Promise<EngineConnection>
         }
         const w = waiting.get(msg.id)
         waiting.delete(msg.id)
-        if (msg.error) w?.reject(new Error(msg.error.message))
+        // `data` carries extra facts, such as the retries of a failed Upload.
+        if (msg.error) w?.reject(Object.assign(new Error(msg.error.message), { data: msg.error.data }))
         else w?.resolve(msg.result)
       }
     }

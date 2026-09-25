@@ -4,12 +4,12 @@ import (
 	"context"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
-	"github.com/aws/smithy-go/middleware"
 )
 
 // multipartThreshold is the file size from which an Upload goes in Parts (PRD U1).
@@ -46,13 +46,26 @@ func partSize(size int64) int64 {
 
 // uploadParts sends the file as a multipart upload. Each Part reads its own section of the file,
 // so no Part is held in memory, and all Parts except the last have the same size (PRD U2).
-func (s *session) uploadParts(ctx context.Context, client *s3.Client, f io.ReaderAt, p uploadParams, key string, total int64, progress *partsProgress) (etag, checksum string, err error) {
+func (s *session) uploadParts(ctx context.Context, client *s3.Client, f io.ReaderAt, p uploadParams, key string, total int64, progress *partsProgress) (etag, checksum string, retries int, err error) {
 	id, bucket := p.ID, p.Destination.Bucket
-	created, err := client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
-		Bucket: &bucket, Key: &key, ChecksumAlgorithm: types.ChecksumAlgorithmCrc32,
+	// The retries of all calls of this Upload; the Parts add to it in parallel.
+	var allRetries atomic.Int64
+	defer func() { retries = int(allRetries.Load()) }()
+	retry := func(ctx context.Context, op func() error) (int, error) {
+		n, err := s.retry(ctx, op)
+		allRetries.Add(int64(n))
+		return n, err
+	}
+
+	var created *s3.CreateMultipartUploadOutput
+	_, err = retry(ctx, func() (err error) {
+		created, err = client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+			Bucket: &bucket, Key: &key, ChecksumAlgorithm: types.ChecksumAlgorithmCrc32,
+		})
+		return err
 	})
 	if err != nil {
-		return "", "", err
+		return "", "", 0, err
 	}
 	// A failed Upload aborts its multipart upload, so no Parts stay on the Destination (ticket 11 will resume instead).
 	defer func() {
@@ -84,11 +97,18 @@ func (s *session) uploadParts(ctx context.Context, client *s3.Client, f io.Reade
 			n, start := int32(i+1), int64(i)*size
 			length := min(size, total-start)
 			startedAt := s.now()
-			var attempts int
-			out, err := client.UploadPart(partsCtx, &s3.UploadPartInput{
-				Bucket: &bucket, Key: &key, UploadId: created.UploadId, PartNumber: aws.Int32(n), ChecksumAlgorithm: types.ChecksumAlgorithmCrc32,
-				Body: &partReader{part: io.NewSectionReader(f, start, length), progress: progress}, ContentLength: aws.Int64(length),
-			}, countAttempts(&attempts))
+			body := &partReader{part: io.NewSectionReader(f, start, length), progress: progress}
+			var out *s3.UploadPartOutput
+			partRetries, err := retry(partsCtx, func() (err error) {
+				if _, err := body.Seek(0, io.SeekStart); err != nil {
+					return err
+				}
+				out, err = client.UploadPart(partsCtx, &s3.UploadPartInput{
+					Bucket: &bucket, Key: &key, UploadId: created.UploadId, PartNumber: aws.Int32(n), ChecksumAlgorithm: types.ChecksumAlgorithmCrc32,
+					Body: body, ContentLength: aws.Int64(length),
+				})
+				return err
+			})
 			if err != nil {
 				cancel(err)
 				return
@@ -96,32 +116,23 @@ func (s *session) uploadParts(ctx context.Context, client *s3.Client, f io.Reade
 			parts[i] = types.CompletedPart{PartNumber: aws.Int32(n), ETag: out.ETag, ChecksumCRC32: out.ChecksumCRC32}
 			finishedAt := s.now()
 			s.notify("part.done", partDoneEvent{ID: id, N: n, Size: length, StartedAt: startedAt.UTC(), FinishedAt: finishedAt.UTC(),
-				Retries: attempts - 1, BPS: bytesPerSecond(length, finishedAt.Sub(startedAt))})
+				Retries: partRetries, BPS: bytesPerSecond(length, finishedAt.Sub(startedAt))})
 		}()
 	}
 	wg.Wait()
 	if err := context.Cause(partsCtx); err != nil {
-		return "", "", err
+		return "", "", 0, err
 	}
-	done, err := client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
-		Bucket: &bucket, Key: &key, UploadId: created.UploadId,
-		MultipartUpload: &types.CompletedMultipartUpload{Parts: parts},
+	var done *s3.CompleteMultipartUploadOutput
+	_, err = retry(ctx, func() (err error) {
+		done, err = client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
+			Bucket: &bucket, Key: &key, UploadId: created.UploadId,
+			MultipartUpload: &types.CompletedMultipartUpload{Parts: parts},
+		})
+		return err
 	})
 	if err != nil {
-		return "", "", err
+		return "", "", 0, err
 	}
-	return aws.ToString(done.ETag), firstNonEmpty(done.ChecksumCRC64NVME, done.ChecksumCRC32, done.ChecksumCRC32C), nil
-}
-
-// countAttempts counts the tries of one call, including the SDK retries.
-func countAttempts(n *int) func(*s3.Options) {
-	return func(o *s3.Options) {
-		o.APIOptions = append(o.APIOptions, func(stack *middleware.Stack) error {
-			return stack.Finalize.Insert(middleware.FinalizeMiddlewareFunc("CountAttempts",
-				func(ctx context.Context, in middleware.FinalizeInput, next middleware.FinalizeHandler) (middleware.FinalizeOutput, middleware.Metadata, error) {
-					*n++
-					return next.HandleFinalize(ctx, in)
-				}), "Retry", middleware.After)
-		})
-	}
+	return aws.ToString(done.ETag), firstNonEmpty(done.ChecksumCRC64NVME, done.ChecksumCRC32, done.ChecksumCRC32C), 0, nil
 }

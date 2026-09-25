@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,9 @@ import (
 type Options struct {
 	HTTPClient *http.Client
 	Now        func() time.Time
+	// Sleep waits between retries; Jitter gives a random fraction in [0, 1) (PRD U5).
+	Sleep  func(ctx context.Context, d time.Duration) error
+	Jitter func() float64
 }
 
 type message struct {
@@ -29,8 +33,15 @@ type message struct {
 }
 
 type rpcError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code    int             `json:"code"`
+	Message string          `json:"message"`
+	Data    json.RawMessage `json:"data,omitempty"`
+}
+
+// errorWithData is an error that also gives data to the Host in `error.data`.
+type errorWithData interface {
+	error
+	ErrorData() any
 }
 
 // session is one connection to the Host. Requests go both ways, one JSON message per line.
@@ -78,7 +89,12 @@ func (s *session) handle(ctx context.Context, req message) {
 		return
 	}
 	if err != nil {
-		s.send(message{ID: req.ID, Error: &rpcError{Code: -32000, Message: err.Error()}})
+		e := &rpcError{Code: -32000, Message: err.Error()}
+		var withData errorWithData
+		if errors.As(err, &withData) {
+			e.Data, _ = json.Marshal(withData.ErrorData())
+		}
+		s.send(message{ID: req.ID, Error: e})
 		return
 	}
 	raw, _ := json.Marshal(result)

@@ -27,3 +27,12 @@ func clearMessage(err error, p destTestParams) string {
 	}
 	return err.Error()
 }
+
+// uploadError is a failed Upload: the clear message for the user, and the retries for the Host (ticket 10).
+type uploadError struct {
+	message string
+	retries int
+}
+
+func (e *uploadError) Error() string  { return e.message }
+func (e *uploadError) ErrorData() any { return map[string]int{"retries": e.retries} }

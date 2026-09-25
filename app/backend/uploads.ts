@@ -17,6 +17,8 @@ export interface UploadDone {
   checksum: string
   link: string
   size: number
+  /** Retries over all calls of the Upload (PRD U5). */
+  retries: number
 }
 
 /** A notification for the user; `id` comes back with the action the user picks. */
@@ -39,6 +41,7 @@ export interface UploadSummary {
   key: string | null
   link: string | null
   error: string | null
+  retries: number
 }
 
 /** One uploaded Part of a multipart Upload (PRD §9.6). */
@@ -76,6 +79,7 @@ const SCHEMA = `
     checksum TEXT,
     link TEXT,
     error_msg TEXT,
+    retries INTEGER NOT NULL DEFAULT 0,
     started_at TEXT NOT NULL,
     finished_at TEXT
   );
@@ -133,6 +137,9 @@ export function createUploads(deps: {
   if (!db.all<{ name: string }>('PRAGMA table_info(uploads)').some((c) => c.name === 'error_msg')) {
     db.exec('ALTER TABLE uploads ADD COLUMN error_msg TEXT')
   }
+  if (!db.all<{ name: string }>('PRAGMA table_info(uploads)').some((c) => c.name === 'retries')) {
+    db.exec('ALTER TABLE uploads ADD COLUMN retries INTEGER NOT NULL DEFAULT 0')
+  }
 
   return {
     /** One Drop: every file goes to the default destination; the Links go to the clipboard. */
@@ -176,13 +183,19 @@ export function createUploads(deps: {
         if (r.status === 'fulfilled') {
           const d = r.value
           db.run(
-            `UPDATE uploads SET state = 'done', key = ?, etag = ?, checksum = ?, link = ?, finished_at = ? WHERE id = ?`,
-            [d.key, d.etag, d.checksum, d.link, finishedAt, ids[i]],
+            `UPDATE uploads SET state = 'done', key = ?, etag = ?, checksum = ?, link = ?, retries = ?, finished_at = ? WHERE id = ?`,
+            [d.key, d.etag, d.checksum, d.link, d.retries, finishedAt, ids[i]],
           )
           links.push(d.link)
         } else {
           const message = r.reason instanceof Error ? r.reason.message : String(r.reason)
-          db.run(`UPDATE uploads SET state = 'failed', error_msg = ?, finished_at = ? WHERE id = ?`, [message, finishedAt, ids[i]])
+          const retries = r.reason?.data?.retries ?? 0
+          db.run(`UPDATE uploads SET state = 'failed', error_msg = ?, retries = ?, finished_at = ? WHERE id = ?`, [
+            message,
+            retries,
+            finishedAt,
+            ids[i],
+          ])
         }
       })
       if (links.length === 0) return
@@ -242,7 +255,8 @@ export function createUploads(deps: {
           key: string | null
           link: string | null
           error_msg: string | null
-        }>('SELECT id, batch_id, path, state, key, link, error_msg FROM uploads ORDER BY batch_id, position')
+          retries: number
+        }>('SELECT id, batch_id, path, state, key, link, error_msg, retries FROM uploads ORDER BY batch_id, position')
         .map((r) => ({
           id: r.id,
           batchId: r.batch_id,
@@ -251,6 +265,7 @@ export function createUploads(deps: {
           key: r.key,
           link: r.link,
           error: r.error_msg,
+          retries: r.retries,
         }))
     },
   }
