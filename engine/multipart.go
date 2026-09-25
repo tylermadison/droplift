@@ -50,7 +50,7 @@ func (s *session) uploadParts(ctx context.Context, client *s3.Client, f io.Reade
 	id, bucket := p.ID, p.Destination.Bucket
 	// The retries of all calls of this Upload; the Parts add to it in parallel.
 	var allRetries atomic.Int64
-	defer func() { retries = int(allRetries.Load()) }()
+	sum := func() int { return int(allRetries.Load()) }
 	retry := func(ctx context.Context, op func() error) (int, error) {
 		n, err := s.retry(ctx, op)
 		allRetries.Add(int64(n))
@@ -65,7 +65,7 @@ func (s *session) uploadParts(ctx context.Context, client *s3.Client, f io.Reade
 		return err
 	})
 	if err != nil {
-		return "", "", 0, err
+		return "", "", sum(), err
 	}
 	// A failed Upload aborts its multipart upload, so no Parts stay on the Destination (ticket 11 will resume instead).
 	defer func() {
@@ -121,7 +121,7 @@ func (s *session) uploadParts(ctx context.Context, client *s3.Client, f io.Reade
 	}
 	wg.Wait()
 	if err := context.Cause(partsCtx); err != nil {
-		return "", "", 0, err
+		return "", "", sum(), err
 	}
 	var done *s3.CompleteMultipartUploadOutput
 	_, err = retry(ctx, func() (err error) {
@@ -132,7 +132,7 @@ func (s *session) uploadParts(ctx context.Context, client *s3.Client, f io.Reade
 		return err
 	})
 	if err != nil {
-		return "", "", 0, err
+		return "", "", sum(), err
 	}
-	return aws.ToString(done.ETag), firstNonEmpty(done.ChecksumCRC64NVME, done.ChecksumCRC32, done.ChecksumCRC32C), 0, nil
+	return aws.ToString(done.ETag), firstNonEmpty(done.ChecksumCRC64NVME, done.ChecksumCRC32, done.ChecksumCRC32C), sum(), nil
 }

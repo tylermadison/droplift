@@ -24,3 +24,14 @@
 - R2 risk (PRD §13): a retry sends the same Part number with the same fixed size; completed Part numbers are never sent again.
 - **Not covered:** a Part that fails after all 8 tries gets no Part row (the Upload row has the retries, and the multipart upload is aborted). Drive rate limits (`rateLimitExceeded`, `userRateLimitExceeded`) wait for tickets 15/16; add them to `retryable`.
 - **Not checked on the real bucket:** the user chose to skip a real upload. A real R2 error cannot be forced, so only the tests show the retries.
+
+**2026-09-25 · code review** (Standards + Spec)
+
+- Fixed: a network timeout that also matches `context.DeadlineExceeded` did not retry. Now only a done context of the Upload (cancel, or a failed sibling Part) stops the retries (test: "network timeout" in the decision table).
+- Fixed: a connection reset while the SDK read the response (a 2xx with an error) did not retry. Now it retries (test with a broken `CreateMultipartUpload` response).
+- Fixed smells: `uploadParts` returned a `0` that a `defer` replaced (now each `return` gives the real count); the test fake `failOnce` is replaced by the general `failing`, with one `partNumber` helper; one `PRAGMA table_info(uploads)` query.
+- Changed on purpose: `dest.test` (the Test button, PRD R1) now tries each call 1 time, because the SDK retries are off for all clients. Before, the SDK tried up to 3 times. A transient 5xx during Test now shows as a failure; the user can click Test again.
+- Accepted: PRD P3 says `max(committed, in-flight)`. The Engine shows the highest value so far. It never goes back, but during a Part retry the bar stays at the old peak until the retried Part passes it.
+- **For ticket 14 (error map):** Complete retries. If the first Complete succeeds and its response is lost, the retry gets `NoSuchUpload` (404, no retry). The Upload is then marked failed, but the object is on the Destination. Ticket 14 can treat `NoSuchUpload` after a Complete retry as a success check (for example with `HeadObject`).
+- **For ticket 11 (resume):** `shown` is local to each `upload()` call. A resume must start it at the committed bytes, or the bar shows 0 first.
+- Left (optional smells): the repeated "`var out`; `retry(...)`" shape (4 times), the untyped `error.data` in the Host (a typed `EngineError` class), tests that repeat the `h.keys` line.

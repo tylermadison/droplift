@@ -256,29 +256,8 @@ func TestEachPartSendsPartDoneWithItsSizeTimesAndSpeed(t *testing.T) {
 	}
 }
 
-// failOnce answers the first UploadPart of one Part number with a 500, then passes on.
-type failOnce struct {
-	part   string
-	next   *fakeS3
-	mu     sync.Mutex
-	failed bool
-}
-
-func (f *failOnce) RoundTrip(r *http.Request) (*http.Response, error) {
-	f.mu.Lock()
-	fail := !f.failed && r.URL.Query().Get("partNumber") == f.part
-	f.failed = f.failed || fail
-	f.mu.Unlock()
-	if fail {
-		io.Copy(io.Discard, r.Body)
-		return &http.Response{StatusCode: http.StatusInternalServerError, Body: http.NoBody, Request: r, Header: http.Header{}}, nil
-	}
-	return f.next.RoundTrip(r)
-}
-
 func TestPartDoneCountsTheRetriesOfThatPart(t *testing.T) {
-	h := startEngineWith(t, nil, Options{Now: fixedNow, HTTPClient: &http.Client{Transport: &failOnce{part: "2", next: multipartS3()}}})
-	h.keys["account.1"] = map[string]string{"accessKeyId": "AKIDEXAMPLE", "secretAccessKey": "wJalrXUtnFEMI/K7MDENG"}
+	h := retryEngine(t, &failing{match: partNumber("2"), times: 1, status: 500, code: "InternalError", next: multipartS3()}, &fakeSleep{})
 	path := writeFile(t, "video.mov", strings.Repeat("x", 20*mib))
 	done := partsDone(h)
 

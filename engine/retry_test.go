@@ -43,6 +43,10 @@ func (f *failing) RoundTrip(r *http.Request) (*http.Response, error) {
 
 func anyPut(r *http.Request) bool { return r.Method == http.MethodPut }
 
+func partNumber(n string) func(*http.Request) bool {
+	return func(r *http.Request) bool { return r.URL.Query().Get("partNumber") == n }
+}
+
 // fakeSleep records each backoff wait and returns at once.
 type fakeSleep struct {
 	mu    sync.Mutex
@@ -66,7 +70,9 @@ func retryEngine(t *testing.T, transport http.RoundTripper, sleep *fakeSleep) *h
 	return h
 }
 
-func publicLink() map[string]any { return map[string]any{"type": "public", "baseUrl": "https://cdn.example.com"} }
+func publicLink() map[string]any {
+	return map[string]any{"type": "public", "baseUrl": "https://cdn.example.com"}
+}
 
 func TestA503RetriesWithDoublingBackoffUpTo30sAndSucceedsOnThe8thTry(t *testing.T) {
 	s3 := &fakeS3{}
@@ -84,8 +90,9 @@ func TestA503RetriesWithDoublingBackoffUpTo30sAndSucceedsOnThe8thTry(t *testing.
 	}
 }
 
-// dropsConnection fails the first matching request with a network error (no HTTP status), then passes on.
+// dropsConnection fails the first PUT with a network error (no HTTP status), then passes on.
 type dropsConnection struct {
+	err     error // io.ErrUnexpectedEOF if nil
 	next    http.RoundTripper
 	mu      sync.Mutex
 	dropped bool
@@ -96,6 +103,9 @@ func (d *dropsConnection) RoundTrip(r *http.Request) (*http.Response, error) {
 	drop := !d.dropped && r.Method == http.MethodPut
 	d.dropped = d.dropped || drop
 	d.mu.Unlock()
+	if drop && d.err != nil {
+		return nil, d.err
+	}
 	if drop {
 		return nil, io.ErrUnexpectedEOF
 	}
@@ -152,16 +162,22 @@ func TestTheRetryDecisionTable(t *testing.T) {
 			}
 		})
 	}
-	t.Run("network error", func(t *testing.T) {
-		count := &countPuts{next: &dropsConnection{next: &fakeS3{}}}
-		h := retryEngine(t, count, &fakeSleep{})
+	for name, err := range map[string]error{
+		"network error": io.ErrUnexpectedEOF,
+		// An HTTP client timeout also matches context.DeadlineExceeded, but the Upload's context is not done.
+		"network timeout": fmt.Errorf("Client.Timeout exceeded: %w", context.DeadlineExceeded),
+	} {
+		t.Run(name, func(t *testing.T) {
+			count := &countPuts{next: &dropsConnection{err: err, next: &fakeS3{}}}
+			h := retryEngine(t, count, &fakeSleep{})
 
-		enqueue(t, h, r2Upload(writeFile(t, "notes.txt", "hello\n"), publicLink()))
+			enqueue(t, h, r2Upload(writeFile(t, "notes.txt", "hello\n"), publicLink()))
 
-		if count.puts != 2 {
-			t.Errorf("tries = %d, want 2", count.puts)
-		}
-	})
+			if count.puts != 2 {
+				t.Errorf("tries = %d, want 2", count.puts)
+			}
+		})
+	}
 }
 
 func TestAnUploadFailsAfter8TriesOfARetryableError(t *testing.T) {
@@ -207,8 +223,7 @@ func (p *partTries) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 func TestARetrySendsOnlyTheFailedPartAgain(t *testing.T) {
-	part2 := func(r *http.Request) bool { return r.URL.Query().Get("partNumber") == "2" }
-	tries := &partTries{tries: map[string]int{}, next: &failing{match: part2, times: 2, status: 503, code: "ServiceUnavailable", next: multipartS3()}}
+	tries := &partTries{tries: map[string]int{}, next: &failing{match: partNumber("2"), times: 2, status: 503, code: "ServiceUnavailable", next: multipartS3()}}
 	h := retryEngine(t, tries, &fakeSleep{})
 	done := partsDone(h)
 
@@ -233,11 +248,8 @@ func TestTheUploadResultHasTheRetriesOfAllItsCalls(t *testing.T) {
 		t.Errorf("single PUT: retries = %d, want 2", got.Retries)
 	}
 
-	part := func(n string) func(*http.Request) bool {
-		return func(r *http.Request) bool { return r.URL.Query().Get("partNumber") == n }
-	}
-	transport := &failing{match: part("2"), times: 2, status: 503, code: "ServiceUnavailable",
-		next: &failing{match: part("3"), times: 1, status: 500, code: "InternalError", next: multipartS3()}}
+	transport := &failing{match: partNumber("2"), times: 2, status: 503, code: "ServiceUnavailable",
+		next: &failing{match: partNumber("3"), times: 1, status: 500, code: "InternalError", next: multipartS3()}}
 	h = retryEngine(t, transport, &fakeSleep{})
 	json.Unmarshal(h.call("upload.enqueue", r2Upload(writeFile(t, "video.mov", strings.Repeat("x", 20*mib)), publicLink())), &got)
 	if got.Retries != 3 {
@@ -246,7 +258,6 @@ func TestTheUploadResultHasTheRetriesOfAllItsCalls(t *testing.T) {
 }
 
 func TestProgressNeverGoesBackDuringARetry(t *testing.T) {
-	part2 := func(r *http.Request) bool { return r.URL.Query().Get("partNumber") == "2" }
 	for _, c := range []struct {
 		name  string
 		size  int
@@ -254,7 +265,7 @@ func TestProgressNeverGoesBackDuringARetry(t *testing.T) {
 		next  *fakeS3
 	}{
 		{"single PUT", 64 * 1024, anyPut, &fakeS3{}},
-		{"Part", 20 * mib, part2, multipartS3()},
+		{"Part", 20 * mib, partNumber("2"), multipartS3()},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			// Each clock read is 100 ms later, so every byte change gives a progress event.
@@ -299,5 +310,43 @@ func TestAFailedUploadGivesItsRetriesInTheErrorData(t *testing.T) {
 	json.Unmarshal(raw, &e)
 	if e.Data.Retries != 7 {
 		t.Errorf("error = %s, want data.retries 7", raw)
+	}
+}
+
+// brokenBody fails during the read, like a connection reset after the status line.
+type brokenBody struct{}
+
+func (brokenBody) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+func (brokenBody) Close() error             { return nil }
+
+// breaksCreateResponse answers the first CreateMultipartUpload with a 200 whose body breaks, then passes on.
+type breaksCreateResponse struct {
+	next    http.RoundTripper
+	mu      sync.Mutex
+	creates int
+}
+
+func (b *breaksCreateResponse) RoundTrip(r *http.Request) (*http.Response, error) {
+	if !r.URL.Query().Has("uploads") {
+		return b.next.RoundTrip(r)
+	}
+	b.mu.Lock()
+	b.creates++
+	first := b.creates == 1
+	b.mu.Unlock()
+	if first {
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/xml"}}, Body: brokenBody{}, Request: r}, nil
+	}
+	return b.next.RoundTrip(r)
+}
+
+func TestAConnectionResetWhileReadingTheResponseRetries(t *testing.T) {
+	transport := &breaksCreateResponse{next: multipartS3()}
+	h := retryEngine(t, transport, &fakeSleep{})
+
+	enqueue(t, h, r2Upload(writeFile(t, "video.mov", strings.Repeat("x", 20*mib)), publicLink()))
+
+	if transport.creates != 2 {
+		t.Errorf("creates = %d, want 2", transport.creates)
 	}
 }

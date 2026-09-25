@@ -133,13 +133,10 @@ export function createUploads(deps: {
   const turn = limiter(deps.filesAtOnce ?? FILES_AT_ONCE)
   const { db, engine } = deps
   db.exec(SCHEMA)
-  // Column added after the table first shipped to a development database.
-  if (!db.all<{ name: string }>('PRAGMA table_info(uploads)').some((c) => c.name === 'error_msg')) {
-    db.exec('ALTER TABLE uploads ADD COLUMN error_msg TEXT')
-  }
-  if (!db.all<{ name: string }>('PRAGMA table_info(uploads)').some((c) => c.name === 'retries')) {
-    db.exec('ALTER TABLE uploads ADD COLUMN retries INTEGER NOT NULL DEFAULT 0')
-  }
+  // Columns added after the table first shipped to a development database.
+  const columns = db.all<{ name: string }>('PRAGMA table_info(uploads)').map((c) => c.name)
+  if (!columns.includes('error_msg')) db.exec('ALTER TABLE uploads ADD COLUMN error_msg TEXT')
+  if (!columns.includes('retries')) db.exec('ALTER TABLE uploads ADD COLUMN retries INTEGER NOT NULL DEFAULT 0')
 
   return {
     /** One Drop: every file goes to the default destination; the Links go to the clipboard. */

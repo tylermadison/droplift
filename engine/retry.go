@@ -22,7 +22,8 @@ const (
 func (s *session) retry(ctx context.Context, op func() error) (retries int, err error) {
 	for try := 1; ; try++ {
 		err = op()
-		if err == nil || !retryable(err) || try == maxTries {
+		// A done context (cancel, or a sibling Part failed) stops the retries; a network timeout does not.
+		if err == nil || ctx.Err() != nil || !retryable(err) || try == maxTries {
 			return try - 1, err
 		}
 		wait := time.Duration(s.jitter() * float64(min(retryMax, retryBase<<(try-1))))
@@ -33,11 +34,8 @@ func (s *session) retry(ctx context.Context, op func() error) (retries int, err 
 }
 
 // retryable is the retry decision table (PRD U5): 5xx, 429, S3 SlowDown and RequestTimeout,
-// and network errors with no HTTP status. Other 4xx errors do not retry.
+// and network errors (no HTTP status, or a response that broke during the read). Other 4xx errors do not retry.
 func retryable(err error) bool {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return false
-	}
 	var apiErr smithy.APIError
 	if errors.As(err, &apiErr) {
 		switch apiErr.ErrorCode() {
@@ -51,8 +49,9 @@ func retryable(err error) bool {
 	}
 	var resp *smithyhttp.ResponseError
 	if errors.As(err, &resp) {
+		// A 2xx with an error: the connection broke while the SDK read the response.
 		status := resp.HTTPStatusCode()
-		return status >= 500 || status == 429
+		return status >= 500 || status == 429 || status < 300
 	}
 	return false
 }
