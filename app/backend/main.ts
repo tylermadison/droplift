@@ -2,6 +2,7 @@
 import { createDestinationsApi, type DestinationDraft } from './destinations'
 import { startEngine, type EngineConnection } from './engine'
 import { createLaunch } from './launch'
+import { createQueue, type ProgressEvent } from './queue'
 import { openDb } from './sqlite'
 import { createUploads, type UploadDone } from './uploads'
 
@@ -22,8 +23,22 @@ export async function init(app: TinyApp) {
   launch = createLaunch({ bundlePath, showDashboard: () => app.show(), setTimer: (ms, fire) => setTimeout(fire, ms) })
   launch.init()
 
+  const queue = createQueue({
+    dock: {
+      progress: (value) => app.progress(value),
+      // After the accessory start, the Dock tile drops badges for a few seconds, and the launcher skips a
+      // badge text that did not change. Clearing first makes every flush set the badge again (ticket 06).
+      badge: (text) => {
+        app.badge('')
+        if (text) app.badge(text)
+      },
+    },
+    push: (event, data) => app.push(event, data),
+    setTimer: (ms, fire) => setTimeout(fire, ms),
+  })
   engine = await startEngine(async (method, params) => {
     if (method === 'secret.request') return destinations!.secretFor(params?.account)
+    if (method === 'progress') return queue.progress(params as ProgressEvent)
     throw new Error(`unknown method ${method}`)
   })
   const db = await openDb(app)
@@ -38,6 +53,7 @@ export async function init(app: TinyApp) {
     engine: { enqueue: (request) => engine!.call<UploadDone>('upload.enqueue', request) },
     clipboard: { writeText: (text) => app.clipboard.write({ text }) },
     bundlePath,
+    queue,
   })
   markReady()
 }

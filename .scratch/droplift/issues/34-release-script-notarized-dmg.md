@@ -23,3 +23,6 @@
 **2026-09-24 · from spike 01 (F9):** The Info.plist patch needs two document types: `public.item` + `public.folder`, and a second type with specific UTIs so the app shows in Finder's Open With list. See PRD D2.
 
 **2026-09-24:** No Developer ID now. The script must work without one (self-signed or ad-hoc, no notarization). Notarization steps from spike 02: `spikes/02-engine-sidecar/NOTES.md` on branch `spike/m0`.
+
+**2026-09-24 · from ticket 06:** With the release build, check that the Dock badge shows during an upload. On the development Mac, macOS hides the badge for `app.droplift` (cause unknown; the code is proven with another bundle ID).
+

@@ -47,6 +47,8 @@ type host struct {
 	enc  *json.Encoder
 	scan *bufio.Scanner
 	keys map[string]map[string]string
+	// onNotify sees each notification (a message with a method and no id) from the engine.
+	onNotify func(method string, params json.RawMessage)
 }
 
 func startEngine(t *testing.T, s3 *fakeS3) *host {
@@ -58,7 +60,9 @@ func startEngineWith(t *testing.T, s3 *fakeS3, opts Options) *host {
 	engineSide, hostSide := net.Pipe()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(func() { cancel(); hostSide.Close() })
-	opts.HTTPClient = &http.Client{Transport: s3}
+	if s3 != nil {
+		opts.HTTPClient = &http.Client{Transport: s3}
+	}
 	go Serve(ctx, engineSide, opts)
 	return &host{t: t, enc: json.NewEncoder(hostSide), scan: bufio.NewScanner(hostSide), keys: map[string]map[string]string{}}
 }
@@ -74,9 +78,7 @@ func (h *host) call(method string, params any) json.RawMessage {
 		var msg struct {
 			ID     json.RawMessage `json:"id"`
 			Method string          `json:"method"`
-			Params struct {
-				Account string `json:"account"`
-			} `json:"params"`
+			Params json.RawMessage `json:"params"`
 			Result json.RawMessage `json:"result"`
 			Error  json.RawMessage `json:"error"`
 		}
@@ -84,7 +86,17 @@ func (h *host) call(method string, params any) json.RawMessage {
 			h.t.Fatal(err)
 		}
 		if msg.Method == "secret.request" {
-			h.enc.Encode(map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": h.keys[msg.Params.Account]})
+			var p struct {
+				Account string `json:"account"`
+			}
+			json.Unmarshal(msg.Params, &p)
+			h.enc.Encode(map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": h.keys[p.Account]})
+			continue
+		}
+		if msg.Method != "" {
+			if h.onNotify != nil {
+				h.onNotify(msg.Method, msg.Params)
+			}
 			continue
 		}
 		if msg.Error != nil {

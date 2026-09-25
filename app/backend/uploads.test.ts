@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import { createDestinationsApi, type DestinationDraft } from './destinations'
+import { createQueue } from './queue'
 import { createUploads, type UploadEngine } from './uploads'
 import { memoryDb, memorySecrets } from './test-fakes'
 
@@ -25,7 +26,7 @@ const instantEngine: UploadEngine = {
   }),
 }
 
-async function setup(engine: UploadEngine = instantEngine) {
+async function setup(engine: UploadEngine = instantEngine, queue?: ReturnType<typeof createQueue>) {
   const db = memoryDb()
   const destinations = createDestinationsApi({ db, secrets: memorySecrets(), engine: { testDestination: async () => ({ ok: true }) } })
   await destinations.testDestination(r2Draft)
@@ -37,6 +38,7 @@ async function setup(engine: UploadEngine = instantEngine) {
     destinations,
     clipboard: { writeText: (text) => void clipboard.push(text) },
     bundlePath: BUNDLE,
+    queue,
   })
   return { uploads, clipboard }
 }
@@ -77,6 +79,37 @@ describe('drop', () => {
       ['done', null],
     ])
     expect(clipboard).toEqual(['https://cdn.example.com/good.png'])
+  })
+
+  test('a drop shows its files on the Dock badge while they upload, then clears', async () => {
+    const dock = { progress: [] as (number | null)[], badge: [] as string[] }
+    let flushes: (() => void)[] = []
+    const tick = () => {
+      const due = flushes
+      flushes = []
+      due.forEach((f) => f())
+    }
+    const queue = createQueue({
+      dock: { progress: (v) => void dock.progress.push(v), badge: (t) => void dock.badge.push(t) },
+      push: () => {},
+      setTimer: (_ms, fire) => void flushes.push(fire),
+    })
+    let release!: () => void
+    let started!: () => void
+    const held = new Promise<void>((r) => (release = r))
+    const uploading = new Promise<void>((r) => (started = r))
+    const engine: UploadEngine = { enqueue: async (req) => (started(), await held, instantEngine.enqueue(req)) }
+    const { uploads } = await setup(engine, queue)
+
+    const dropping = uploads.drop(['/Users/me/Desktop/a.png', '/Users/me/Desktop/b.png'])
+    await uploading
+    tick()
+    release()
+    await dropping
+    tick()
+
+    expect(dock.badge).toEqual(['2', ''])
+    expect(dock.progress.at(-1)).toBeNull()
   })
 
   test('paths inside the app bundle are not uploads', async () => {

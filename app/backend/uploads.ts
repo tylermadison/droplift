@@ -59,6 +59,8 @@ export function createUploads(deps: {
   destinations: { defaultForUpload(): Promise<UploadTarget | null> }
   clipboard: { writeText(text: string): void }
   bundlePath: string
+  /** Live progress (Dock and windows). */
+  queue?: { add(ids: string[]): void; finish(id: string): void }
 }) {
   const { db, engine } = deps
   db.exec(SCHEMA)
@@ -90,7 +92,10 @@ export function createUploads(deps: {
         return id
       })
 
-      const results = await Promise.allSettled(ids.map((id, i) => engine.enqueue({ id, path: paths[i], destination })))
+      deps.queue?.add(ids)
+      const results = await Promise.allSettled(
+        ids.map((id, i) => engine.enqueue({ id, path: paths[i], destination }).finally(() => deps.queue?.finish(id))),
+      )
       const links: string[] = []
       results.forEach((r, i) => {
         const finishedAt = new Date().toISOString()

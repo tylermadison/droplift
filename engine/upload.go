@@ -74,12 +74,16 @@ func (s *session) upload(ctx context.Context, p uploadParams) (uploadResult, err
 	if err != nil {
 		return uploadResult{}, err
 	}
+	total := info.Size()
+	report := func(sent int64) { s.notify("progress", progressEvent{ID: p.ID, Sent: min(sent, total), Total: total}) }
+	body := &countingReader{file: f, total: total, report: report, now: s.now}
 	out, err := client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket: &d.Bucket, Key: &key, Body: f, ContentLength: aws.Int64(info.Size()),
+		Bucket: &d.Bucket, Key: &key, Body: body, ContentLength: aws.Int64(total),
 	})
 	if err != nil {
 		return uploadResult{}, fmt.Errorf("%s", clearMessage(err, d))
 	}
+	report(total)
 
 	link, err := s.link(ctx, client, d, key)
 	if err != nil {

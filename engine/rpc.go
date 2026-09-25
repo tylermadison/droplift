@@ -105,6 +105,12 @@ func (s *session) dispatch(ctx context.Context, method string, params json.RawMe
 	return nil, fmt.Errorf("unknown method %q", method)
 }
 
+// notify sends a notification (no reply) to the Host.
+func (s *session) notify(method string, params any) {
+	raw, _ := json.Marshal(params)
+	s.send(message{Method: method, Params: raw})
+}
+
 // call sends a request to the Host and waits for its result.
 func (s *session) call(ctx context.Context, method string, params, result any) error {
 	s.callMu.Lock()
