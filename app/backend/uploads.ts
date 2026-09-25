@@ -14,6 +14,27 @@ export interface UploadDone {
   etag: string
   checksum: string
   link: string
+  size: number
+}
+
+/** A notification for the user; `id` comes back with the action the user picks. */
+export interface Notice {
+  id: string
+  title: string
+  body: string
+  actions: { id: 'copy' | 'open' | 'dashboard'; title: string }[]
+}
+
+/** Decimal units, as Finder shows them: 84 MB is 84,000,000 bytes. */
+function formatSize(bytes: number): string {
+  const units = ['B', 'kB', 'MB', 'GB', 'TB']
+  let value = bytes
+  let unit = 0
+  while (value >= 1000 && unit < units.length - 1) {
+    value /= 1000
+    unit++
+  }
+  return `${value >= 10 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`
 }
 
 export interface UploadEngine {
@@ -61,7 +82,13 @@ export function createUploads(deps: {
   bundlePath: string
   /** Live progress (Dock and windows). */
   queue?: { add(ids: string[]): void; finish(id: string): void }
+  notify?: (notice: Notice) => void
+  /** Milliseconds; for the Batch duration. */
+  now?: () => number
+  openUrl?: (url: string) => void
+  showDashboard?: () => void
 }) {
+  const clock = deps.now ?? Date.now
   const { db, engine } = deps
   db.exec(SCHEMA)
   // Column added after the table first shipped to a development database.
@@ -74,6 +101,7 @@ export function createUploads(deps: {
     async drop(dropped: string[]): Promise<void> {
       const paths = withoutBundlePaths(dropped, deps.bundlePath)
       if (paths.length === 0) return
+      const startedAt = clock()
       const target = await deps.destinations.defaultForUpload()
       if (!target) return
       const now = new Date().toISOString()
@@ -111,7 +139,34 @@ export function createUploads(deps: {
           db.run(`UPDATE uploads SET state = 'failed', error_msg = ?, finished_at = ? WHERE id = ?`, [message, finishedAt, ids[i]])
         }
       })
-      if (links.length > 0) deps.clipboard.writeText(links.join('\n'))
+      if (links.length === 0) return
+      deps.clipboard.writeText(links.join('\n'))
+      const bytes = results.reduce((sum, r) => sum + (r.status === 'fulfilled' ? r.value.size : 0), 0)
+      const seconds = ((clock() - startedAt) / 1000).toFixed(1)
+      deps.notify?.({
+        id: `batch.${batch.id}`,
+        title: 'Upload done',
+        body: `${links.length} ${links.length === 1 ? 'file' : 'files'} uploaded · ${formatSize(bytes)} · ${seconds} s`,
+        actions: [
+          { id: 'copy', title: 'Copy links' },
+          { id: 'open', title: 'Open' },
+          { id: 'dashboard', title: 'Show in dashboard' },
+        ],
+      })
+    },
+
+    /** The user picked an action on a Batch notification (PRD P5). */
+    async notificationAction(info: { id: string; action: string }): Promise<void> {
+      const batchId = Number(info.id.replace(/^batch\./, ''))
+      const links = db
+        .all<{ link: string }>(
+          "SELECT link FROM uploads WHERE batch_id = ? AND state = 'done' ORDER BY position",
+          [batchId],
+        )
+        .map((r) => r.link)
+      if (info.action === 'copy') deps.clipboard.writeText(links.join('\n'))
+      if (info.action === 'open') links.forEach((link) => deps.openUrl?.(link))
+      if (info.action === 'dashboard') deps.showDashboard?.()
     },
 
     async listUploads(): Promise<UploadSummary[]> {

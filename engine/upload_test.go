@@ -105,3 +105,18 @@ func TestUploadSendsTheFileBytesAndRecordsETagAndChecksum(t *testing.T) {
 		t.Errorf("etag = %q, checksum = %q", got.ETag, got.Checksum)
 	}
 }
+
+func TestUploadResultHasTheFileSize(t *testing.T) {
+	h := startEngineWith(t, &fakeS3{}, Options{Now: fixedNow})
+	h.keys["account.1"] = map[string]string{"accessKeyId": "AKIDEXAMPLE", "secretAccessKey": "wJalrXUtnFEMI/K7MDENG"}
+	path := writeFile(t, "notes.txt", "hello from droplift\n") // 20 bytes
+
+	var got struct {
+		Size int64 `json:"size"`
+	}
+	json.Unmarshal(h.call("upload.enqueue", r2Upload(path, map[string]any{"type": "public", "baseUrl": "https://cdn.example.com"})), &got)
+
+	if got.Size != 20 {
+		t.Errorf("size = %d, want 20", got.Size)
+	}
+}

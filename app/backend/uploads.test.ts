@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import { createDestinationsApi, type DestinationDraft } from './destinations'
 import { createQueue } from './queue'
-import { createUploads, type UploadEngine } from './uploads'
+import { createUploads, type Notice, type UploadEngine } from './uploads'
 import { memoryDb, memorySecrets } from './test-fakes'
 
 const BUNDLE = '/Applications/Droplift.app'
@@ -23,15 +23,23 @@ const instantEngine: UploadEngine = {
     etag: 'etag',
     checksum: 'crc',
     link: 'https://cdn.example.com/' + req.path.split('/').pop(),
+    size: 42_000_000,
   }),
 }
 
-async function setup(engine: UploadEngine = instantEngine, queue?: ReturnType<typeof createQueue>) {
+async function setup(
+  engine: UploadEngine = instantEngine,
+  queue?: ReturnType<typeof createQueue>,
+  clock: () => number = () => 0,
+) {
   const db = memoryDb()
   const destinations = createDestinationsApi({ db, secrets: memorySecrets(), engine: { testDestination: async () => ({ ok: true }) } })
   await destinations.testDestination(r2Draft)
   await destinations.saveDestination(r2Draft)
   const clipboard: string[] = []
+  const notifications: Notice[] = []
+  const opened: string[] = []
+  const shown: string[] = []
   const uploads = createUploads({
     db,
     engine,
@@ -39,8 +47,12 @@ async function setup(engine: UploadEngine = instantEngine, queue?: ReturnType<ty
     clipboard: { writeText: (text) => void clipboard.push(text) },
     bundlePath: BUNDLE,
     queue,
+    notify: (n) => void notifications.push(n),
+    now: clock,
+    openUrl: (url) => void opened.push(url),
+    showDashboard: () => void shown.push('dashboard'),
   })
-  return { uploads, clipboard }
+  return { uploads, clipboard, notifications, opened, shown }
 }
 
 describe('drop', () => {
@@ -120,5 +132,67 @@ describe('drop', () => {
 
     expect((await uploads.listUploads()).map((u) => u.path)).toEqual(['/Users/me/Desktop/a.png'])
     expect(clipboard).toEqual(['https://cdn.example.com/a.png'])
+  })
+})
+
+describe('batch notification', () => {
+  test('a finished batch sends one notification with count, size, duration, and 3 actions', async () => {
+    const times = [0, 6200]
+    const { uploads, notifications } = await setup(instantEngine, undefined, () => times.shift() ?? 6200)
+
+    await uploads.drop(['/Users/me/Desktop/a.png', '/Users/me/Desktop/b.png'])
+
+    expect(notifications).toEqual([
+      {
+        id: 'batch.1',
+        title: 'Upload done',
+        body: '2 files uploaded · 84 MB · 6.2 s',
+        actions: [
+          { id: 'copy', title: 'Copy links' },
+          { id: 'open', title: 'Open' },
+          { id: 'dashboard', title: 'Show in dashboard' },
+        ],
+      },
+    ])
+  })
+
+  test('one small file reads "1 file" with one decimal for the size', async () => {
+    const times = [0, 800]
+    const oneFile: UploadEngine = { enqueue: async (req) => ({ ...(await instantEngine.enqueue(req)), size: 2_500_000 }) }
+    const { uploads, notifications } = await setup(oneFile, undefined, () => times.shift() ?? 800)
+
+    await uploads.drop(['/Users/me/Desktop/a.png'])
+
+    expect(notifications.map((n) => n.body)).toEqual(['1 file uploaded · 2.5 MB · 0.8 s'])
+  })
+})
+
+describe('notification actions', () => {
+  test('Copy links puts the batch links on the clipboard again', async () => {
+    const { uploads, clipboard } = await setup()
+    await uploads.drop(['/Users/me/Desktop/a.png', '/Users/me/Desktop/b.png'])
+    clipboard.length = 0
+
+    await uploads.notificationAction({ id: 'batch.1', action: 'copy' })
+
+    expect(clipboard).toEqual(['https://cdn.example.com/a.png\nhttps://cdn.example.com/b.png'])
+  })
+
+  test('Open opens each link of the batch in the browser', async () => {
+    const { uploads, opened } = await setup()
+    await uploads.drop(['/Users/me/Desktop/a.png', '/Users/me/Desktop/b.png'])
+
+    await uploads.notificationAction({ id: 'batch.1', action: 'open' })
+
+    expect(opened).toEqual(['https://cdn.example.com/a.png', 'https://cdn.example.com/b.png'])
+  })
+
+  test('Show in dashboard shows the dashboard', async () => {
+    const { uploads, shown } = await setup()
+    await uploads.drop(['/Users/me/Desktop/a.png'])
+
+    await uploads.notificationAction({ id: 'batch.1', action: 'dashboard' })
+
+    expect(shown).toEqual(['dashboard'])
   })
 })

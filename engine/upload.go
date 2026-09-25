@@ -35,6 +35,7 @@ type uploadResult struct {
 	ETag     string `json:"etag"`
 	Checksum string `json:"checksum"`
 	Link     string `json:"link"`
+	Size     int64  `json:"size"`
 }
 
 // upload sends one file to one Destination with a single PUT, streamed from disk (PRD U1, U10, R5, R6).
@@ -95,6 +96,7 @@ func (s *session) upload(ctx context.Context, p uploadParams) (uploadResult, err
 		ETag:     strings.Trim(aws.ToString(out.ETag), `"`),
 		Checksum: firstNonEmpty(out.ChecksumCRC64NVME, out.ChecksumCRC32, out.ChecksumCRC32C),
 		Link:     link,
+		Size:     total,
 	}, nil
 }
 

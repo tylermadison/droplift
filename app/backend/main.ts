@@ -54,6 +54,9 @@ export async function init(app: TinyApp) {
     clipboard: { writeText: (text) => app.clipboard.write({ text }) },
     bundlePath,
     queue,
+    notify: (n) => void app.notify({ id: n.id, title: n.title, body: n.body, actions: n.actions }),
+    openUrl: (url) => void app.shell.open(url),
+    showDashboard: () => app.show(),
   })
   markReady()
 }
@@ -63,6 +66,12 @@ export async function onOpenFiles(paths: string[]) {
   launch?.openFiles(paths)
   await ready
   await uploads!.drop(paths)
+}
+
+/** A button on a Batch notification: Copy links, Open, or Show in dashboard (PRD P5). */
+export async function onNotificationAction(info: TinyNotificationAction) {
+  await ready
+  await uploads!.notificationAction(info)
 }
 
 // Page API. Never add secretFor here: the page must not receive secret values (PRD A6).
