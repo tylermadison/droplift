@@ -1,6 +1,8 @@
 // Starts the Engine and talks JSON-RPC 2.0 with it over a Unix socket in a private temp dir (PRD §9.2).
 // Not stdin: txiki.js delivers only the first write to a child's stdin.
 
+import type { EngineProcess } from './engine-supervisor'
+
 type Handler = (method: string, params: any) => Promise<unknown>
 
 export interface EngineConnection {
@@ -15,8 +17,11 @@ function enginePath(): string {
   return tjs.env.DROPLIFT_ENGINE || dir + '/droplift-engine'
 }
 
-/** Starts the Engine. `onRequest` answers the Engine's own requests, such as `secret.request`. */
-export async function startEngine(onRequest: Handler): Promise<EngineConnection> {
+/**
+ * Starts the Engine. `onRequest` answers the Engine's own requests, such as `secret.request`.
+ * `exited` settles when the Engine socket closes; calls in flight then never settle here, and the supervisor fails them.
+ */
+export async function startEngine(onRequest: Handler): Promise<EngineProcess> {
   const dir = await tjs.makeTempDir(tjs.tmpDir + '/droplift-XXXXXX')
   await tjs.chmod(dir, 0o700)
   const socket = dir + '/engine.sock'
@@ -25,7 +30,7 @@ export async function startEngine(onRequest: Handler): Promise<EngineConnection>
   await tjs.chmod(socket, 0o600)
 
   // app.spawnHidden is tjs.spawn on macOS (it only hides a console window on Windows), and it is not in the types.
-  tjs.spawn([enginePath(), '--socket', socket], { stdin: 'ignore', stdout: 'ignore', stderr: 'inherit' })
+  const child = tjs.spawn([enginePath(), '--socket', socket], { stdin: 'ignore', stdout: 'ignore', stderr: 'inherit' })
   const { value: conn } = await listening.readable.getReader().read()
   const { readable, writable } = await conn.opened
   const writer = writable.getWriter()
@@ -34,11 +39,11 @@ export async function startEngine(onRequest: Handler): Promise<EngineConnection>
   const waiting = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>()
   let nextId = 1
 
-  ;(async () => {
+  const exited = (async () => {
     const reader = readable.getReader()
     let buf = ''
     for (;;) {
-      const { value, done } = await reader.read()
+      const { value, done } = await reader.read().catch(() => ({ value: undefined, done: true }))
       if (done) break
       buf += dec.decode(value, { stream: true })
       let i
@@ -61,9 +66,16 @@ export async function startEngine(onRequest: Handler): Promise<EngineConnection>
         else w?.resolve(msg.result)
       }
     }
+    // The socket closed: make sure the process is gone, so a restart does not leave two Engines.
+    try {
+      child.kill('SIGKILL')
+    } catch {}
+    await child.wait().catch(() => {})
+    server.close()
   })()
 
   return {
+    exited,
     call: (method, params) =>
       new Promise((resolve, reject) => {
         const id = nextId++

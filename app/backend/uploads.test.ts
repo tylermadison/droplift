@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'vitest'
 import { createDestinationsApi, type DestinationDraft } from './destinations'
 import { createQueue } from './queue'
-import { createUploads, type Notice, type UploadEngine } from './uploads'
+import { EngineExitedError, EngineStoppedError } from './engine-supervisor'
+import { createUploads, type Notice, type UploadEngine, type UploadRequest } from './uploads'
 import { memoryDb, memorySecrets } from './test-fakes'
 
 const BUNDLE = '/Applications/Droplift.app'
@@ -32,11 +33,13 @@ async function setup(
   engine: UploadEngine = instantEngine,
   queue?: ReturnType<typeof createQueue>,
   clock: () => number = () => 0,
+  db = memoryDb(),
 ) {
-  const db = memoryDb()
   const destinations = createDestinationsApi({ db, secrets: memorySecrets(), engine: { testDestination: async () => ({ ok: true }) } })
-  await destinations.testDestination(r2Draft)
-  await destinations.saveDestination(r2Draft)
+  if ((await destinations.listDestinations()).length === 0) {
+    await destinations.testDestination(r2Draft)
+    await destinations.saveDestination(r2Draft)
+  }
   const clipboard: string[] = []
   const notifications: Notice[] = []
   const opened: string[] = []
@@ -214,8 +217,8 @@ describe('parts', () => {
     let uploads!: Awaited<ReturnType<typeof setup>>['uploads']
     const engine: UploadEngine = {
       async enqueue(req) {
-        uploads.partDone({ id: req.id, n: 2, size: 4_194_304, startedAt: '2026-09-24T21:00:00.500Z', finishedAt: '2026-09-24T21:00:01.500Z', retries: 1, bps: 4_194_304 })
-        uploads.partDone({ id: req.id, n: 1, size: 8_388_608, startedAt: '2026-09-24T21:00:00Z', finishedAt: '2026-09-24T21:00:02Z', retries: 0, bps: 4_194_304 })
+        uploads.partDone({ id: req.id, n: 2, size: 4_194_304, etag: 'part-2', checksum: 'crc-2', startedAt: '2026-09-24T21:00:00.500Z', finishedAt: '2026-09-24T21:00:01.500Z', retries: 1, bps: 4_194_304 })
+        uploads.partDone({ id: req.id, n: 1, size: 8_388_608, etag: 'part-1', checksum: 'crc-1', startedAt: '2026-09-24T21:00:00Z', finishedAt: '2026-09-24T21:00:02Z', retries: 0, bps: 4_194_304 })
         return instantEngine.enqueue(req)
       },
     }
@@ -290,5 +293,122 @@ describe('notification actions', () => {
     await uploads.notificationAction({ id: 'batch.1', action: 'dashboard' })
 
     expect(shown).toEqual(['dashboard'])
+  })
+})
+
+describe('resume (ticket 11)', () => {
+  const started = { id: '1.1', key: '2026/09/video.mov', uploadId: 'up-1', hash: 'b3-hash' }
+  const part1 = { n: 1, size: 8_388_608, etag: 'part-1', checksum: 'crc-1', startedAt: '2026-10-13T10:00:00Z', finishedAt: '2026-10-13T10:00:02Z', retries: 0, bps: 4_194_304 }
+  const done = { id: '1.1', key: '2026/09/video.mov', etag: 'whole', checksum: 'crc-3', link: 'https://cdn.example.com/video.mov', size: 20_971_520, retries: 0 }
+
+  test('the Engine exits during an Upload: the Upload runs again with the saved state, and is not marked failed', async () => {
+    const requests: UploadRequest[] = []
+    let uploads!: Awaited<ReturnType<typeof setup>>['uploads']
+    const engine: UploadEngine = {
+      enqueue: async (req) => {
+        requests.push(req)
+        if (requests.length === 1) {
+          uploads.uploadStarted(started)
+          uploads.partDone({ id: req.id, ...part1 })
+          throw new EngineExitedError()
+        }
+        return done
+      },
+    }
+    const s = await setup(engine)
+    uploads = s.uploads
+
+    await uploads.drop(['/Users/me/Movies/video.mov'])
+
+    expect(requests.map((r) => r.resume)).toEqual([
+      undefined,
+      { key: '2026/09/video.mov', uploadId: 'up-1', hash: 'b3-hash', parts: [{ n: 1, etag: 'part-1', checksum: 'crc-1' }] },
+    ])
+    const [upload] = await uploads.listUploads()
+    expect(upload).toMatchObject({ state: 'done', key: '2026/09/video.mov', error: null })
+    expect(s.clipboard).toEqual(['https://cdn.example.com/video.mov'])
+  })
+
+  test('at launch, an Upload that a kill left active resumes from its saved Parts', async () => {
+    const db = memoryDb()
+    // First run: the app is killed after Part 1; the Engine never answers.
+    let first!: Awaited<ReturnType<typeof setup>>['uploads']
+    const killed: UploadEngine = {
+      enqueue: (req) => {
+        first.uploadStarted(started)
+        first.partDone({ id: req.id, ...part1 })
+        return new Promise(() => {})
+      },
+    }
+    first = (await setup(killed, undefined, undefined, db)).uploads
+    void first.drop(['/Users/me/Movies/video.mov'])
+    await new Promise((r) => setTimeout(r, 0))
+
+    // Next launch.
+    const requests: UploadRequest[] = []
+    const { uploads } = await setup({ enqueue: async (req) => (requests.push(req), done) }, undefined, undefined, db)
+    await uploads.resumeActive()
+
+    expect(requests).toEqual([
+      expect.objectContaining({
+        id: '1.1',
+        path: '/Users/me/Movies/video.mov',
+        destination: expect.objectContaining({ bucket: 'public-assets', provider: 'r2' }),
+        resume: { key: '2026/09/video.mov', uploadId: 'up-1', hash: 'b3-hash', parts: [{ n: 1, etag: 'part-1', checksum: 'crc-1' }] },
+      }),
+    ])
+    const [upload] = await uploads.listUploads()
+    expect(upload).toMatchObject({ state: 'done', link: 'https://cdn.example.com/video.mov' })
+  })
+
+  test('at launch, an active Upload with no saved upload ID starts again from the beginning', async () => {
+    const db = memoryDb()
+    const first = (await setup({ enqueue: () => new Promise(() => {}) }, undefined, undefined, db)).uploads
+    void first.drop(['/Users/me/Desktop/a.png'])
+    await new Promise((r) => setTimeout(r, 0))
+
+    const requests: UploadRequest[] = []
+    const { uploads } = await setup({ enqueue: async (req) => (requests.push(req), { ...done, id: req.id }) }, undefined, undefined, db)
+    await uploads.resumeActive()
+
+    expect(requests).toHaveLength(1)
+    expect(requests[0].resume).toBeUndefined()
+    expect((await uploads.listUploads())[0].state).toBe('done')
+  })
+
+  test('a new upload ID from the Engine replaces the saved Parts of the old one', async () => {
+    const requests: UploadRequest[] = []
+    let uploads!: Awaited<ReturnType<typeof setup>>['uploads']
+    const engine: UploadEngine = {
+      enqueue: async (req) => {
+        requests.push(req)
+        if (requests.length === 1) {
+          uploads.uploadStarted(started)
+          uploads.partDone({ id: req.id, ...part1 })
+          uploads.uploadStarted({ ...started, uploadId: 'up-2' }) // The old upload was gone.
+          throw new EngineExitedError()
+        }
+        return done
+      },
+    }
+    uploads = (await setup(engine)).uploads
+
+    await uploads.drop(['/Users/me/Movies/video.mov'])
+
+    expect(requests[1].resume).toEqual({ key: '2026/09/video.mov', uploadId: 'up-2', hash: 'b3-hash', parts: [] })
+  })
+
+  test('the Engine stopped for good: the Upload stays active for the next launch, and is not marked failed', async () => {
+    const queue = { added: [] as string[], finished: [] as [string, boolean][] }
+    const engine: UploadEngine = { enqueue: async () => Promise.reject(new EngineStoppedError()) }
+    const { uploads } = await setup(engine, {
+      add: (files: { id: string }[]) => void queue.added.push(...files.map((f) => f.id)),
+      finish: (id: string, ok: boolean) => void queue.finished.push([id, ok]),
+    } as never)
+
+    await uploads.drop(['/Users/me/Movies/video.mov'])
+
+    expect((await uploads.listUploads())[0]).toMatchObject({ state: 'active', error: null })
+    expect(queue.finished).toEqual([['1.1', false]])
   })
 })

@@ -29,6 +29,22 @@ type uploadParams struct {
 	Destination destTestParams `json:"destination"`
 	// PartsPerFile is the most Parts in flight for a multipart Upload; 0 means the default.
 	PartsPerFile int `json:"partsPerFile"`
+	// Resume is the saved state of a multipart Upload that a crash or a kill stopped (upload.resume, PRD U6).
+	Resume *resumeState `json:"resume,omitempty"`
+}
+
+// resumeState is what the Host saved from upload.started and the part.done events.
+type resumeState struct {
+	Key      string      `json:"key"`
+	UploadID string      `json:"uploadId"`
+	Hash     string      `json:"hash"`
+	Parts    []savedPart `json:"parts"`
+}
+
+type savedPart struct {
+	N        int32  `json:"n"`
+	ETag     string `json:"etag"`
+	Checksum string `json:"checksum"`
 }
 
 type uploadResult struct {
@@ -64,6 +80,7 @@ func (s *session) upload(ctx context.Context, p uploadParams) (uploadResult, err
 		return uploadResult{}, err
 	}
 
+	hash := hex.EncodeToString(h.Sum(nil))
 	template := d.KeyTemplate
 	if template == "" {
 		template = DefaultKeyTemplate
@@ -71,7 +88,7 @@ func (s *session) upload(ctx context.Context, p uploadParams) (uploadResult, err
 	key := RenderKey(template, KeyInput{
 		FileName: filepath.Base(p.Path),
 		Time:     s.now(),
-		Hash:     hex.EncodeToString(h.Sum(nil)),
+		Hash:     hash,
 		UUID:     newUUID(),
 	})
 
@@ -80,6 +97,15 @@ func (s *session) upload(ctx context.Context, p uploadParams) (uploadResult, err
 		return uploadResult{}, err
 	}
 	total := info.Size()
+	if r := p.Resume; r != nil {
+		if r.Hash == hash && total >= multipartThreshold {
+			key = r.Key
+		} else {
+			// The file changed after the crash: the saved Parts are not its bytes (PRD §8: 0 corrupt objects).
+			s.abort(ctx, client, d.Bucket, r.Key, r.UploadID)
+			p.Resume = nil
+		}
+	}
 	// A retry rewinds the body; the Host still sees the highest value, so progress never goes back (PRD P3).
 	var shown int64
 	report := func(sent int64) {
@@ -89,7 +115,7 @@ func (s *session) upload(ctx context.Context, p uploadParams) (uploadResult, err
 	var etag, checksum string
 	var retries int
 	if total >= multipartThreshold {
-		etag, checksum, retries, err = s.uploadParts(ctx, client, f, p, key, total, &partsProgress{report: report, now: s.now})
+		etag, checksum, retries, err = s.uploadParts(ctx, client, f, p, key, hash, total, report)
 	} else {
 		body := &countingReader{file: f, total: total, report: report, now: s.now}
 		var out *s3.PutObjectOutput

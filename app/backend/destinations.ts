@@ -118,6 +118,39 @@ export function createDestinationsApi(deps: { db: Db; secrets: SecretStore; engi
   const pending = new Map<string, AccessKeys>()
   let nextPending = 1
 
+  /** A saved destination as the Engine needs it for an upload. */
+  function uploadTarget(where: string, params: unknown[] = []): UploadTarget | null {
+    const [row] = db.all<{
+      id: number
+      name: string
+      provider: 's3' | 'r2'
+      bucket: string
+      public_base_url: string | null
+      link_type: 'public' | 'presigned'
+      link_ttl: number
+      keychain_ref: string | null
+      meta_json: string
+    }>(
+      `SELECT d.id, d.name, d.provider, d.bucket, d.public_base_url, d.link_type, d.link_ttl, a.keychain_ref, a.meta_json
+       FROM destinations d JOIN accounts a ON a.id = d.account_id WHERE ${where}`,
+      params,
+    )
+    if (!row) return null
+    const meta = JSON.parse(row.meta_json) as { region?: string; accountId?: string; profile?: string }
+    return {
+      destinationId: row.id,
+      provider: row.provider,
+      name: row.name,
+      bucket: row.bucket,
+      ...meta,
+      account: row.keychain_ref ?? undefined,
+      link:
+        row.link_type === 'public' && row.public_base_url
+          ? { type: 'public', baseUrl: row.public_base_url }
+          : { type: 'presigned', ttlSeconds: row.link_ttl },
+    }
+  }
+
   return {
     async testDestination(draft: DestinationDraft): Promise<TestResult> {
       const { credentials } = draft
@@ -190,34 +223,12 @@ export function createDestinationsApi(deps: { db: Db; secrets: SecretStore; engi
 
     /** The default destination for an upload, or null when there is none. */
     async defaultForUpload(): Promise<UploadTarget | null> {
-      const [row] = db.all<{
-        id: number
-        name: string
-        provider: 's3' | 'r2'
-        bucket: string
-        public_base_url: string | null
-        link_type: 'public' | 'presigned'
-        link_ttl: number
-        keychain_ref: string | null
-        meta_json: string
-      }>(
-        `SELECT d.id, d.name, d.provider, d.bucket, d.public_base_url, d.link_type, d.link_ttl, a.keychain_ref, a.meta_json
-         FROM destinations d JOIN accounts a ON a.id = d.account_id WHERE d.is_default = 1`,
-      )
-      if (!row) return null
-      const meta = JSON.parse(row.meta_json) as { region?: string; accountId?: string; profile?: string }
-      return {
-        destinationId: row.id,
-        provider: row.provider,
-        name: row.name,
-        bucket: row.bucket,
-        ...meta,
-        account: row.keychain_ref ?? undefined,
-        link:
-          row.link_type === 'public' && row.public_base_url
-            ? { type: 'public', baseUrl: row.public_base_url }
-            : { type: 'presigned', ttlSeconds: row.link_ttl },
-      }
+      return uploadTarget('d.is_default = 1')
+    },
+
+    /** The destination of a saved Upload, to resume it; null when it was deleted. */
+    async targetFor(destinationId: number): Promise<UploadTarget | null> {
+      return uploadTarget('d.id = ?', [destinationId])
     },
 
     async listDestinations(): Promise<DestinationSummary[]> {

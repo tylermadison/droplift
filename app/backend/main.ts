@@ -1,10 +1,11 @@
 // Host entry (PRD §9.1). The page can call only the methods in `api`.
 import { createDestinationsApi, type DestinationDraft } from './destinations'
 import { startEngine, type EngineConnection } from './engine'
+import { superviseEngine } from './engine-supervisor'
 import { createLaunch, withoutBundlePaths } from './launch'
 import { createQueue, type ProgressEvent } from './queue'
 import { openDb } from './sqlite'
-import { createUploads, type UploadDone, type PartDone } from './uploads'
+import { createUploads, type UploadDone, type PartDone, type UploadStarted } from './uploads'
 
 let destinations: ReturnType<typeof createDestinationsApi> | undefined
 let uploads: ReturnType<typeof createUploads> | undefined
@@ -38,11 +39,24 @@ export async function init(app: TinyApp) {
     setTimer: (ms, fire) => setTimeout(fire, ms),
     window: progress,
   })
-  engine = await startEngine(async (method, params) => {
+  const onEngineRequest = async (method: string, params: any) => {
     if (method === 'secret.request') return destinations!.secretFor(params?.account)
     if (method === 'progress') return queue.progress(params as ProgressEvent)
+    if (method === 'upload.started') return uploads?.uploadStarted(params as UploadStarted)
     if (method === 'part.done') return uploads?.partDone(params as PartDone)
     throw new Error(`unknown method ${method}`)
+  }
+  // If the Engine exits, it starts again and the Uploads resume; after 3 exits in one minute, the Host stops (PRD §9.2).
+  engine = superviseEngine({
+    start: () => startEngine(onEngineRequest),
+    now: Date.now,
+    onStop: () =>
+      void app.notify({
+        id: 'engine.stopped',
+        title: 'Uploads stopped',
+        body: 'The upload engine stopped 3 times in one minute. Open Droplift again to continue your uploads.',
+        actions: [],
+      }),
   })
   const db = await openDb(app)
   destinations = createDestinationsApi({
@@ -53,7 +67,7 @@ export async function init(app: TinyApp) {
   uploads = createUploads({
     db,
     destinations,
-    engine: { enqueue: (request) => engine!.call<UploadDone>('upload.enqueue', request) },
+    engine: { enqueue: (request) => engine!.call<UploadDone>(request.resume ? 'upload.resume' : 'upload.enqueue', request) },
     clipboard: { writeText: (text) => app.clipboard.write({ text }) },
     bundlePath,
     queue,
@@ -62,6 +76,8 @@ export async function init(app: TinyApp) {
     showDashboard: () => app.window('main').show(),
   })
   markReady()
+  // Uploads that a crash or a kill stopped continue from their last completed Part (PRD U6).
+  void uploads.resumeActive()
 }
 
 const PROGRESS_SIZE = { width: 380, height: 220 }

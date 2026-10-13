@@ -63,6 +63,8 @@ func requestKinds(s3 *fakeS3) []string {
 			kinds = append(kinds, "part")
 		case q.Has("uploadId") && r.Method == http.MethodDelete:
 			kinds = append(kinds, "abort")
+		case q.Has("uploadId") && r.Method == http.MethodGet:
+			kinds = append(kinds, "list")
 		case q.Has("uploadId"):
 			kinds = append(kinds, "complete")
 		default:

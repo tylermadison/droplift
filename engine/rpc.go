@@ -109,7 +109,7 @@ func (s *session) dispatch(ctx context.Context, method string, params json.RawMe
 			return nil, err
 		}
 		return s.destTest(ctx, p), nil
-	case "upload.enqueue":
+	case "upload.enqueue", "upload.resume":
 		var p uploadParams
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
