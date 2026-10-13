@@ -147,7 +147,7 @@ func TestKillTheEngineDuringAMultipartUploadAndResume(t *testing.T) {
 		"id": "kill.1", "path": path, "partsPerFile": 2,
 		"destination": map[string]any{
 			"provider": "r2", "name": "Droplift-test", "bucket": killBucket, "accountId": killAccountID, "profile": "r2",
-			"keyTemplate": "kill-test/{uuid}/{filename}", "link": map[string]any{"type": "presigned", "ttlSeconds": 60},
+			"keyTemplate": "kill-test/{uuid}/{name}.{ext}", "link": map[string]any{"type": "presigned", "ttlSeconds": 60},
 		},
 	}
 	var state resumeState
