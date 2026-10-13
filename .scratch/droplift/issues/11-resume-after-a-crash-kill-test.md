@@ -7,7 +7,7 @@
 **Status:** ready-for-agent
 
 - [ ] Kill the Engine during a multipart Upload: Host restarts it and the Upload continues from the last completed Part
-- [ ] Kill the full app during a multipart Upload: on next launch the Upload continues from the last completed Part
+- [x] Kill the full app during a multipart Upload: on next launch the Upload continues from the last completed Part
 - [ ] Host stops restarting the Engine after 3 exits in one minute and shows an error
 - [x] Resumed objects are not corrupt (checksum matches)
 - [ ] Zero lost Uploads in the kill test
@@ -32,3 +32,12 @@
 - **Not checked yet:** the full-app kill (the user does it by hand), the "Uploads stopped" notice in the app, and the Host restart with the real Engine (only the unit tests show it).
 - **Not covered:** if the kill comes after a successful Complete but before its reply, the resume gets NoSuchUpload and uploads the file again (no loss, only time). Ticket 14 can check with HeadObject.
 - **Note:** the app database has 6 `active` Uploads from earlier sessions. The next launch uploads them again.
+
+**2026-10-13 · full-app kill test** (real app, bucket `droplift-test`, file `GS010002.mp4`, 162 081 953 bytes, 20 Parts)
+
+- The app was killed with SIGKILL after 4 Parts (32 MiB). The database kept the upload ID, the hash, and Parts 1–4 with their ETags and CRC32.
+- After the next launch, Parts 5–20 were sent. Parts 1–4 kept their first `started_at` (23:21:43), so they were not sent again.
+- Upload state `done`, 0 retries, checksum `LHJ05Q==-20`.
+- The object was downloaded and its SHA-256 matches the source file (`8f9544a1…bbc1ec`).
+- Setup for this run: the default destination's account record gets `"profile":"r2"`, so the app uses `~/.aws/credentials` instead of the old Keychain keys. The Keychain keys are still there.
+- **Not checked yet:** kill of the Engine alone in the real app, the "Uploads stopped" notice after 3 exits, and zero lost Uploads with several files.
