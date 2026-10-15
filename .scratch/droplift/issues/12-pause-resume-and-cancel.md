@@ -4,13 +4,13 @@
 
 **Blocked by:** 08 (Progress window), 09 (Multipart upload for large files)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [x] Pause/resume/cancel buttons on each row in the progress window
 - [x] "Pause all" and "Resume all" work on the full Queue
 - [x] Paused state survives an app restart
 - [x] Cancel calls `AbortMultipartUpload` and leaves no incomplete multipart upload
-- [ ] Dock progress and badge stay correct after pause, resume, and cancel
+- [x] Dock progress and badge stay correct after pause, resume, and cancel
 
 ## Comments
 
@@ -33,3 +33,8 @@
 - **Not checked yet:** the Dock badge and Dock progress in the real app (the Dock was hidden, so the test could not see it). The Queue unit tests cover them. The criterion stays open until somebody looks at the Dock.
 - **Known gap:** if the app is killed during the abort of a Cancel, an incomplete multipart upload can stay. The row stays `cancelled`, and no retry happens.
 - **Test note:** a macOS notice banner over the progress window takes the clicks. The first Pause click went to the banner, not to the button.
+
+**2026-10-15 · resolved**
+
+- The user looked at the Dock in the real app. The Dock icon kept the badge and the progress while the Upload was paused, and cleared them when the Upload was cancelled. All five criteria are now shown in the real app.
+- Open follow-up: if the app is killed during the abort of a Cancel, an incomplete multipart upload can stay (see the real-app test comment).
