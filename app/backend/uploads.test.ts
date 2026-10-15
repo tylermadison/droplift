@@ -30,10 +30,11 @@ const instantEngine: UploadEngine = {
 }
 
 async function setup(
-  engine: UploadEngine = instantEngine,
+  engine: Pick<UploadEngine, 'enqueue'> & Partial<UploadEngine> = instantEngine,
   queue?: ReturnType<typeof createQueue>,
   clock: () => number = () => 0,
   db = memoryDb(),
+  extra: Partial<Parameters<typeof createUploads>[0]> = {},
 ) {
   const destinations = createDestinationsApi({ db, secrets: memorySecrets(), engine: { testDestination: async () => ({ ok: true }) } })
   if ((await destinations.listDestinations()).length === 0) {
@@ -46,7 +47,7 @@ async function setup(
   const shown: string[] = []
   const uploads = createUploads({
     db,
-    engine,
+    engine: { pause: async () => {}, cancel: async () => {}, ...engine },
     destinations,
     clipboard: { writeText: (text) => void clipboard.push(text) },
     bundlePath: BUNDLE,
@@ -55,6 +56,7 @@ async function setup(
     now: clock,
     openUrl: (url) => void opened.push(url),
     showDashboard: () => void shown.push('dashboard'),
+    ...extra,
   })
   return { uploads, clipboard, notifications, opened, shown }
 }
@@ -410,5 +412,248 @@ describe('resume (ticket 11)', () => {
 
     expect((await uploads.listUploads())[0]).toMatchObject({ state: 'active', error: null })
     expect(queue.finished).toEqual([['1.1', false]])
+  })
+})
+
+describe('pause, resume, and cancel (ticket 12)', () => {
+  const started = { id: '1.1', key: '2026/10/video.mov', uploadId: 'up-1', hash: 'b3-hash' }
+  const part1 = { n: 1, size: 8_388_608, etag: 'part-1', checksum: 'crc-1', startedAt: '2026-10-15T10:00:00Z', finishedAt: '2026-10-15T10:00:02Z', retries: 0, bps: 4_194_304 }
+  const settle = () => new Promise((r) => setTimeout(r, 0))
+
+  /** An Engine that holds each call until the test finishes it, and stops a call on pause or cancel, like the real one. */
+  function controlledEngine() {
+    const held = new Map<string, { finish: () => void; stop: (err: Error) => void }>()
+    const engine = {
+      requests: [] as UploadRequest[],
+      paused: [] as string[],
+      cancelled: [] as { id: string; key?: string; destination: unknown }[],
+      enqueue(req: UploadRequest) {
+        engine.requests.push(req)
+        return new Promise<Awaited<ReturnType<UploadEngine['enqueue']>>>((resolve, reject) => {
+          held.set(req.id, { finish: () => resolve(instantEngine.enqueue(req)), stop: reject })
+        })
+      },
+      async pause(id: string) {
+        engine.paused.push(id)
+        held.get(id)?.stop(new Error('the upload was paused'))
+        held.delete(id)
+      },
+      async cancel(req: { id: string; key?: string; destination: unknown }) {
+        engine.cancelled.push(req)
+        held.get(req.id)?.stop(new Error('the upload was cancelled'))
+        held.delete(req.id)
+      },
+      finish(id: string) {
+        held.get(id)?.finish()
+        held.delete(id)
+      },
+      running: () => [...held.keys()],
+    }
+    return engine
+  }
+
+  function queueSpy() {
+    const calls: string[] = []
+    return {
+      calls,
+      add: (files: { id: string; state?: string }[]) => void calls.push(...files.map((f) => `add ${f.id} ${f.state ?? 'active'}`)),
+      finish: (id: string, ok: boolean) => void calls.push(`finish ${id} ${ok}`),
+      pause: (id: string) => void calls.push(`pause ${id}`),
+      resume: (id: string) => void calls.push(`resume ${id}`),
+      cancel: (id: string) => void calls.push(`cancel ${id}`),
+    }
+  }
+
+  test('pause stops the running Upload in the Engine and marks it paused, not failed', async () => {
+    const engine = controlledEngine()
+    const queue = queueSpy()
+    const { uploads } = await setup(engine, queue as never)
+
+    void uploads.drop(['/Users/me/Movies/video.mov'])
+    await settle()
+    await uploads.pause('1.1')
+    await settle()
+
+    expect(engine.paused).toEqual(['1.1'])
+    expect((await uploads.listUploads())[0]).toMatchObject({ state: 'paused', error: null })
+    expect(queue.calls).toContain('pause 1.1')
+    expect(queue.calls).not.toContain('finish 1.1 false')
+  })
+
+  test('resume runs the paused Upload again from its saved Parts, and the Batch then puts the Link on the clipboard', async () => {
+    let uploads!: Awaited<ReturnType<typeof setup>>['uploads']
+    const engine = controlledEngine()
+    const enqueue = engine.enqueue
+    engine.enqueue = (req) => {
+      if (engine.requests.length === 0) {
+        uploads.uploadStarted(started)
+        uploads.partDone({ id: req.id, ...part1 })
+      }
+      return enqueue(req)
+    }
+    const s = await setup(engine)
+    uploads = s.uploads
+
+    const dropping = uploads.drop(['/Users/me/Movies/video.mov'])
+    await settle()
+    await uploads.pause('1.1')
+    await settle()
+    await uploads.resume('1.1')
+    await settle()
+    engine.finish('1.1')
+    await dropping
+
+    expect(engine.requests.map((r) => r.resume)).toEqual([
+      undefined,
+      { key: '2026/10/video.mov', uploadId: 'up-1', hash: 'b3-hash', parts: [{ n: 1, etag: 'part-1', checksum: 'crc-1' }] },
+    ])
+    expect((await uploads.listUploads())[0].state).toBe('done')
+    expect(s.clipboard).toEqual(['https://cdn.example.com/video.mov'])
+  })
+
+  test('a paused Upload gives back its turn, so a waiting file starts', async () => {
+    const engine = controlledEngine()
+    const { uploads } = await setup(engine, undefined, undefined, undefined, { filesAtOnce: 1 })
+
+    void uploads.drop(['/Users/me/Desktop/a.png', '/Users/me/Desktop/b.png'])
+    await settle()
+    expect(engine.running()).toEqual(['1.1'])
+    await uploads.pause('1.1')
+    await settle()
+
+    expect(engine.running()).toEqual(['1.2'])
+  })
+
+  test('a waiting Upload that is paused does not start when its turn comes', async () => {
+    const engine = controlledEngine()
+    const { uploads } = await setup(engine, undefined, undefined, undefined, { filesAtOnce: 1 })
+
+    void uploads.drop(['/Users/me/Desktop/a.png', '/Users/me/Desktop/b.png'])
+    await settle()
+    await uploads.pause('1.2')
+    engine.finish('1.1')
+    await settle()
+
+    expect(engine.requests.map((r) => r.id)).toEqual(['1.1'])
+    expect((await uploads.listUploads()).map((u) => u.state)).toEqual(['done', 'paused'])
+  })
+
+  test('cancel stops the running Upload and asks the Engine to abort its multipart upload; the Batch ends with no Link for it', async () => {
+    let uploads!: Awaited<ReturnType<typeof setup>>['uploads']
+    const engine = controlledEngine()
+    const enqueue = engine.enqueue
+    engine.enqueue = (req) => {
+      if (req.id === '1.1') uploads.uploadStarted(started)
+      return enqueue(req)
+    }
+    const queue = queueSpy()
+    const s = await setup(engine, queue as never)
+    uploads = s.uploads
+
+    const dropping = uploads.drop(['/Users/me/Movies/video.mov', '/Users/me/Desktop/b.png'])
+    await settle()
+    await uploads.cancel('1.1')
+    engine.finish('1.2')
+    await dropping
+
+    expect(engine.cancelled).toEqual([
+      { id: '1.1', key: '2026/10/video.mov', destination: expect.objectContaining({ bucket: 'public-assets' }) },
+    ])
+    expect((await uploads.listUploads()).map((u) => [u.state, u.error])).toEqual([
+      ['cancelled', null],
+      ['done', null],
+    ])
+    expect(queue.calls).toContain('cancel 1.1')
+    expect(queue.calls).not.toContain('finish 1.1 false')
+    expect(s.clipboard).toEqual(['https://cdn.example.com/b.png'])
+  })
+
+  test('cancel of a paused Upload aborts its saved multipart upload and ends the Batch', async () => {
+    let uploads!: Awaited<ReturnType<typeof setup>>['uploads']
+    const engine = controlledEngine()
+    const enqueue = engine.enqueue
+    engine.enqueue = (req) => (uploads.uploadStarted(started), enqueue(req))
+    uploads = (await setup(engine)).uploads
+
+    const dropping = uploads.drop(['/Users/me/Movies/video.mov'])
+    await settle()
+    await uploads.pause('1.1')
+    await uploads.cancel('1.1')
+    await dropping
+
+    expect(engine.cancelled).toEqual([expect.objectContaining({ id: '1.1', key: '2026/10/video.mov' })])
+    expect((await uploads.listUploads())[0].state).toBe('cancelled')
+  })
+
+  test('Pause all pauses every active Upload; Resume all runs them again', async () => {
+    const engine = controlledEngine()
+    const { uploads } = await setup(engine, undefined, undefined, undefined, { filesAtOnce: 2 })
+
+    const dropping = uploads.drop(['/Users/me/Desktop/a.png', '/Users/me/Desktop/b.png', '/Users/me/Desktop/c.png'])
+    await settle()
+    await uploads.pauseAll()
+    await settle()
+    expect((await uploads.listUploads()).map((u) => u.state)).toEqual(['paused', 'paused', 'paused'])
+    expect(engine.running()).toEqual([])
+
+    await uploads.resumeAll()
+    for (let i = 0; i < 3; i++) {
+      await settle()
+      engine.running().forEach((id) => engine.finish(id))
+    }
+    await dropping
+
+    expect((await uploads.listUploads()).map((u) => u.state)).toEqual(['done', 'done', 'done'])
+  })
+
+  test('a paused Upload stays paused after a restart, shows in the Queue as paused, and resumes from its saved Parts', async () => {
+    const db = memoryDb()
+    let first!: Awaited<ReturnType<typeof setup>>['uploads']
+    const engine = controlledEngine()
+    const enqueue = engine.enqueue
+    engine.enqueue = (req) => (first.uploadStarted(started), first.partDone({ id: req.id, ...part1 }), enqueue(req))
+    first = (await setup(engine, undefined, undefined, db)).uploads
+    void first.drop(['/Users/me/Movies/video.mov'])
+    await settle()
+    await first.pause('1.1')
+
+    // Next launch.
+    const next = controlledEngine()
+    const queue = queueSpy()
+    const { uploads } = await setup(next, queue as never, undefined, db, { fileSize: async () => 20_971_520 })
+    await uploads.resumeActive()
+    await settle()
+    expect(next.requests).toEqual([])
+    expect((await uploads.listUploads())[0].state).toBe('paused')
+    expect(queue.calls).toEqual(['add 1.1 paused'])
+
+    await uploads.resume('1.1')
+    await settle()
+    expect(next.requests.map((r) => r.resume?.parts)).toEqual([[{ n: 1, etag: 'part-1', checksum: 'crc-1' }]])
+    next.finish('1.1')
+    await settle()
+    expect((await uploads.listUploads())[0].state).toBe('done')
+  })
+
+  test('after a restart, a paused Upload shows in the Queue at once, also while an active Upload still runs', async () => {
+    const db = memoryDb()
+    const engine = controlledEngine()
+    const before = (await setup(engine, undefined, undefined, db)).uploads
+    void before.drop(['/Users/me/Movies/a.mov', '/Users/me/Movies/b.mov'])
+    await settle()
+    await before.pause('1.1')
+    await settle()
+    expect(engine.running()).toEqual(['1.2'])
+
+    // Next launch: 1.2 runs again and is held; 1.1 stays paused.
+    const next = controlledEngine()
+    const queue = queueSpy()
+    const { uploads } = await setup(next, queue as never, undefined, db, { fileSize: async () => 20_971_520 })
+    void uploads.resumeActive()
+    await settle()
+    await settle()
+
+    expect(next.running()).toEqual(['1.2'])
+    expect(queue.calls).toEqual(['add 1.2 active', 'add 1.1 paused'])
   })
 })

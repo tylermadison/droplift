@@ -84,3 +84,38 @@ body {
 .row[data-state='failed'] .fill {
   background: var(--failed);
 }
+.state-paused,
+.state-cancelled {
+  color: var(--muted);
+}
+.row[data-state='paused'] .fill,
+.row[data-state='cancelled'] .fill {
+  background: var(--muted);
+}
+/* Pause all / Resume all: in the top bar, right of the close button. */
+.toolbar {
+  position: fixed;
+  top: 5px;
+  right: 12px;
+  display: flex;
+  gap: 6px;
+}
+button {
+  font: inherit;
+  font-size: 11px;
+  color: var(--text);
+  background: var(--track);
+  border: 0;
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: default;
+}
+button.icon {
+  background: none;
+  color: var(--muted);
+  padding: 0 2px;
+  font-size: 10px;
+}
+button.icon:hover {
+  color: var(--text);
+}

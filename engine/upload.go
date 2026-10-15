@@ -59,7 +59,8 @@ type uploadResult struct {
 }
 
 // upload sends one file to one Destination, streamed from disk: a single PUT below 16 MiB, multipart above (PRD U1, U10, R5, R6).
-func (s *session) upload(ctx context.Context, p uploadParams) (uploadResult, error) {
+// onKey gets the object key before the transfer starts, so a cancel can abort its multipart uploads.
+func (s *session) upload(ctx context.Context, p uploadParams, onKey func(string)) (uploadResult, error) {
 	d := p.Destination
 	f, err := os.Open(p.Path)
 	if err != nil {
@@ -106,6 +107,7 @@ func (s *session) upload(ctx context.Context, p uploadParams) (uploadResult, err
 			p.Resume = nil
 		}
 	}
+	onKey(key)
 	// A retry rewinds the body; the Host still sees the highest value, so progress never goes back (PRD P3).
 	var shown int64
 	report := func(sent int64) {

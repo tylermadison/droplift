@@ -53,11 +53,15 @@ type session struct {
 	callMu  sync.Mutex
 	nextID  int
 	waiting map[string]chan message
+
+	// The upload calls in flight, by Upload ID, for upload.pause and upload.cancel.
+	runMu   sync.Mutex
+	running map[string]*runningUpload
 }
 
 // Serve handles one Host connection until it closes or ctx ends.
 func Serve(ctx context.Context, conn io.ReadWriteCloser, opts Options) error {
-	s := &session{opts: opts, enc: json.NewEncoder(conn), waiting: map[string]chan message{}}
+	s := &session{opts: opts, enc: json.NewEncoder(conn), waiting: map[string]chan message{}, running: map[string]*runningUpload{}}
 	go func() { <-ctx.Done(); conn.Close() }()
 
 	scan := bufio.NewScanner(conn)
@@ -114,7 +118,19 @@ func (s *session) dispatch(ctx context.Context, method string, params json.RawMe
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		return s.upload(ctx, p)
+		return s.runUpload(ctx, p)
+	case "upload.pause":
+		p, err := decode[controlParams](params)
+		if err != nil {
+			return nil, err
+		}
+		return s.pauseUpload(p), nil
+	case "upload.cancel":
+		p, err := decode[controlParams](params)
+		if err != nil {
+			return nil, err
+		}
+		return s.cancelUpload(ctx, p)
 	case "aws.profiles":
 		return awsProfiles()
 	}
