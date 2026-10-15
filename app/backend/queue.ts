@@ -15,18 +15,22 @@ export interface QueueFile {
   id: string
   name: string
   provider: 's3' | 'r2'
+  /** An Upload that a restart left paused comes in paused, with its saved bytes (ticket 12). */
+  state?: 'active' | 'paused'
+  sent?: number
+  total?: number
 }
 
 /** One row of the progress window. */
-export interface ProgressRow extends QueueFile {
+export interface ProgressRow extends Omit<QueueFile, 'state' | 'sent' | 'total'> {
   sent: number
   total: number
   bytesPerSecond: number
   etaSeconds: number | null
-  state: 'active' | 'done' | 'failed'
+  state: 'active' | 'paused' | 'cancelled' | 'done' | 'failed'
 }
 
-interface Entry extends QueueFile {
+interface Entry extends Omit<QueueFile, 'state' | 'sent' | 'total'> {
   shown: number
   total: number
   state: ProgressRow['state']
@@ -67,14 +71,16 @@ export function createQueue(deps: {
     scheduled = false
     const t = now()
     for (const e of entries.values()) {
-      if (t > e.lastAt) e.bytesPerSecond = ((e.shown - e.lastShown) * 1000) / (t - e.lastAt)
+      if (e.state !== 'active') e.bytesPerSecond = 0
+      else if (t > e.lastAt) e.bytesPerSecond = ((e.shown - e.lastShown) * 1000) / (t - e.lastAt)
       e.lastShown = e.shown
       e.lastAt = t
     }
     deps.push('progress', [...entries.values()].map(row))
 
-    const all = [...entries.values()]
-    const remaining = all.filter((e) => e.state === 'active').length
+    // A paused Upload still waits in the Queue; a cancelled one leaves the totals (ticket 12).
+    const all = [...entries.values()].filter((e) => e.state !== 'cancelled')
+    const remaining = all.filter((e) => e.state === 'active' || e.state === 'paused').length
     if (remaining === 0) {
       const failed = all.some((e) => e.state === 'failed')
       entries.clear()
@@ -90,6 +96,15 @@ export function createQueue(deps: {
     deps.dock.badge(String(remaining))
   }
 
+  function setState(id: string, state: 'active' | 'paused' | 'cancelled') {
+    const entry = entries.get(id)
+    if (!entry) return
+    entry.state = state
+    entry.lastShown = entry.shown
+    entry.lastAt = now()
+    schedule()
+  }
+
   function schedule() {
     if (scheduled) return
     scheduled = true
@@ -100,8 +115,8 @@ export function createQueue(deps: {
     add(files: QueueFile[]) {
       deps.window?.show()
       const t = now()
-      for (const f of files) {
-        entries.set(f.id, { ...f, shown: 0, total: 0, state: 'active', lastShown: 0, lastAt: t, bytesPerSecond: 0 })
+      for (const { state = 'active', sent = 0, total = 0, ...f } of files) {
+        entries.set(f.id, { ...f, shown: sent, total, state, lastShown: sent, lastAt: t, bytesPerSecond: 0 })
       }
       schedule()
     },
@@ -114,10 +129,23 @@ export function createQueue(deps: {
     },
     finish(id: string, ok = true) {
       const entry = entries.get(id)
-      if (!entry) return
+      if (!entry || entry.state === 'cancelled') return
       entry.state = ok ? 'done' : 'failed'
       if (ok) entry.shown = entry.total
       schedule()
+    },
+    pause(id: string) {
+      setState(id, 'paused')
+    },
+    resume(id: string) {
+      setState(id, 'active')
+    },
+    cancel(id: string) {
+      setState(id, 'cancelled')
+    },
+    /** The rows now, for a window that opens after the last push (a paused row gets no more pushes). */
+    rows(): ProgressRow[] {
+      return [...entries.values()].map(row)
     },
   }
 }

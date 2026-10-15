@@ -9,6 +9,7 @@ import { createUploads, type UploadDone, type PartDone, type UploadStarted } fro
 
 let destinations: ReturnType<typeof createDestinationsApi> | undefined
 let uploads: ReturnType<typeof createUploads> | undefined
+let queue: ReturnType<typeof createQueue> | undefined
 let engine: EngineConnection | undefined
 let markReady!: () => void
 const ready = new Promise<void>((resolve) => (markReady = resolve))
@@ -25,7 +26,7 @@ export async function init(app: TinyApp) {
   launch.init()
   progress = progressWindow(app)
 
-  const queue = createQueue({
+  queue = createQueue({
     dock: {
       progress: (value) => app.progress(value),
       // After the accessory start, the Dock tile drops badges for a few seconds, and the launcher skips a
@@ -41,7 +42,7 @@ export async function init(app: TinyApp) {
   })
   const onEngineRequest = async (method: string, params: any) => {
     if (method === 'secret.request') return destinations!.secretFor(params?.account)
-    if (method === 'progress') return queue.progress(params as ProgressEvent)
+    if (method === 'progress') return queue!.progress(params as ProgressEvent)
     if (method === 'upload.started') return uploads?.uploadStarted(params as UploadStarted)
     if (method === 'part.done') return uploads?.partDone(params as PartDone)
     throw new Error(`unknown method ${method}`)
@@ -67,7 +68,12 @@ export async function init(app: TinyApp) {
   uploads = createUploads({
     db,
     destinations,
-    engine: { enqueue: (request) => engine!.call<UploadDone>(request.resume ? 'upload.resume' : 'upload.enqueue', request) },
+    engine: {
+      enqueue: (request) => engine!.call<UploadDone>(request.resume ? 'upload.resume' : 'upload.enqueue', request),
+      pause: (id) => engine!.call('upload.pause', { id }),
+      cancel: (request) => engine!.call('upload.cancel', request),
+    },
+    fileSize: async (path) => (await tjs.stat(path)).size,
     clipboard: { writeText: (text) => app.clipboard.write({ text }) },
     bundlePath,
     queue,
@@ -150,4 +156,12 @@ export const api: Record<string, TinyApiHandler> = {
   saveDestination: async (draft: DestinationDraft) => (await ready, destinations!.saveDestination(draft)),
   awsProfiles: async () => (await ready, engine!.call('aws.profiles')),
   listUploads: async () => (await ready, uploads!.listUploads()),
+  // The progress window reads the rows at open; a paused row gets no more pushes.
+  progressRows: async () => queue?.rows() ?? [],
+  // Progress window buttons (PRD U7, P2).
+  pauseUpload: async (id: string) => (await ready, uploads!.pause(id)),
+  resumeUpload: async (id: string) => (await ready, uploads!.resume(id)),
+  cancelUpload: async (id: string) => (await ready, uploads!.cancel(id)),
+  pauseAll: async () => (await ready, uploads!.pauseAll()),
+  resumeAll: async () => (await ready, uploads!.resumeAll()),
 }

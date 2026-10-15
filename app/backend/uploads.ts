@@ -51,13 +51,17 @@ export interface Notice {
 export interface UploadEngine {
   /** Sends `upload.resume` when the request has `resume`, else `upload.enqueue`. */
   enqueue(request: UploadRequest): Promise<UploadDone>
+  /** Stops the running call of an Upload and keeps its multipart upload, so a resume continues it (ticket 12). */
+  pause(id: string): Promise<void>
+  /** Stops the running call of an Upload, if any, and aborts the multipart uploads of its key (PRD U7). */
+  cancel(request: { id: string; destination: UploadRequest['destination']; key?: string }): Promise<void>
 }
 
 export interface UploadSummary {
   id: string
   batchId: number
   path: string
-  state: 'active' | 'done' | 'failed'
+  state: 'active' | 'paused' | 'cancelled' | 'done' | 'failed'
   key: string | null
   link: string | null
   error: string | null
@@ -146,7 +150,15 @@ export function createUploads(deps: {
   clipboard: { writeText(text: string): void }
   bundlePath: string
   /** Live progress (Dock and windows). */
-  queue?: { add(files: QueueFile[]): void; finish(id: string, ok: boolean): void }
+  queue?: {
+    add(files: QueueFile[]): void
+    finish(id: string, ok: boolean): void
+    pause(id: string): void
+    resume(id: string): void
+    cancel(id: string): void
+  }
+  /** Bytes; for the progress of an Upload that a restart left paused. */
+  fileSize?: (path: string) => Promise<number>
   notify?: (notice: Notice) => void
   /** Milliseconds; for the Batch duration. */
   now?: () => number
@@ -184,18 +196,57 @@ export function createUploads(deps: {
     return { key: row.key, uploadId: row.upload_id, hash: row.hash, parts }
   }
 
+  /** What the user did to one Upload that has not ended (ticket 12). */
+  interface Control {
+    path: string
+    destination: UploadRequest['destination']
+    paused: boolean
+    cancelled: boolean
+    /** The Engine has a call of this Upload in flight. */
+    running: boolean
+    /** Ends the wait of a paused Upload. */
+    wake?: () => void
+  }
+  const controls = new Map<string, Control>()
+
+  function control(id: string, path: string, destination: UploadRequest['destination'], paused = false): Control {
+    const c: Control = { path, destination, paused, cancelled: false, running: false }
+    controls.set(id, c)
+    return c
+  }
+
   /**
-   * Runs one Upload to its end and records it. An Engine exit runs it again from the saved state (PRD U6).
-   * Gives the Link, or null when the Upload failed or must wait for the next launch.
+   * Runs one Upload until it is done, failed, or cancelled. A paused Upload gives back its turn and waits for a resume.
+   * Gives the Link, or null when the Upload failed, was cancelled, or must wait for the next launch.
    */
-  async function run(id: string, path: string, destination: UploadRequest['destination']): Promise<UploadDone | null> {
+  async function settle(id: string, c: Control): Promise<UploadDone | null> {
+    try {
+      for (;;) {
+        if (c.paused) await new Promise<void>((wake) => (c.wake = wake))
+        if (c.cancelled) return null
+        const result = await turn(() => attempt(id, c))
+        if (result !== 'paused') return result
+      }
+    } finally {
+      controls.delete(id)
+    }
+  }
+
+  /** One turn of an Upload: records its end. An Engine exit runs it again from the saved state (PRD U6). */
+  async function attempt(id: string, c: Control): Promise<UploadDone | null | 'paused'> {
+    if (c.cancelled) return null
+    if (c.paused) return 'paused'
     let done: UploadDone
+    c.running = true
     try {
       for (;;) {
         try {
-          done = await engine.enqueue({ id, path, destination, resume: savedState(id) })
+          done = await engine.enqueue({ id, path: c.path, destination: c.destination, resume: savedState(id) })
           break
         } catch (err) {
+          // The user stopped it: not a failure.
+          if (c.cancelled) return null
+          if (c.paused) return 'paused'
           if (!(err instanceof EngineExitedError)) throw err
         }
       }
@@ -212,6 +263,8 @@ export function createUploads(deps: {
         id,
       ])
       return null
+    } finally {
+      c.running = false
     }
     deps.queue?.finish(id, true)
     db.run(
@@ -221,7 +274,7 @@ export function createUploads(deps: {
     return done
   }
 
-  return {
+  const uploads = {
     /** One Drop: every file goes to the default destination; the Links go to the clipboard. */
     async drop(dropped: string[]): Promise<void> {
       const paths = withoutBundlePaths(dropped, deps.bundlePath)
@@ -246,7 +299,7 @@ export function createUploads(deps: {
       })
 
       deps.queue?.add(ids.map((id, i) => ({ id, name: paths[i].split('/').pop()!, provider: destination.provider })))
-      const results = (await Promise.all(ids.map((id, i) => turn(() => run(id, paths[i], destination))))).filter(
+      const results = (await Promise.all(ids.map((id, i) => settle(id, control(id, paths[i], destination))))).filter(
         (d): d is UploadDone => d !== null,
       )
       const links = results.map((d) => d.link)
@@ -291,6 +344,20 @@ export function createUploads(deps: {
       deps.queue?.add(
         runs.filter((r) => r.target).map((r) => ({ id: r.id, name: r.path.split('/').pop()!, provider: r.target!.provider })),
       )
+      // Paused Uploads stay paused over a restart (ticket 12); the Queue shows them with their saved bytes.
+      // Show them before the wait for the active Uploads, which can take minutes.
+      const paused = db.all<{ id: string; path: string; destination_id: number; saved: number }>(
+        `SELECT u.id, u.path, u.destination_id, (SELECT COALESCE(SUM(size), 0) FROM parts p WHERE p.upload_id = u.id) AS saved
+         FROM uploads u WHERE state = 'paused' ORDER BY batch_id, position`,
+      )
+      const files: QueueFile[] = []
+      for (const r of paused) {
+        const target = await deps.destinations.targetFor(r.destination_id)
+        if (!target) continue
+        const total = (await deps.fileSize?.(r.path).catch(() => 0)) ?? 0
+        files.push({ id: r.id, name: r.path.split('/').pop()!, provider: target.provider, state: 'paused', sent: r.saved, total })
+      }
+      if (files.length > 0) deps.queue?.add(files)
       await Promise.all(
         runs.map(({ id, path, target }) => {
           if (!target) {
@@ -302,9 +369,70 @@ export function createUploads(deps: {
             return
           }
           const { destinationId: _, ...destination } = target
-          return turn(() => run(id, path, destination))
+          return settle(id, control(id, path, destination))
         }),
       )
+    },
+
+    /** Stops an Upload and keeps its saved Parts; it gives back its turn (PRD U7). */
+    async pause(id: string): Promise<void> {
+      const c = controls.get(id)
+      if (!c || c.paused || c.cancelled) return
+      c.paused = true
+      db.run(`UPDATE uploads SET state = 'paused' WHERE id = ? AND state = 'active'`, [id])
+      deps.queue?.pause(id)
+      if (c.running) await engine.pause(id)
+    },
+
+    /** Runs a paused Upload again from its saved Parts, also one that a restart left paused. */
+    async resume(id: string): Promise<void> {
+      const c = controls.get(id)
+      if (c) {
+        if (!c.paused || c.cancelled) return
+        c.paused = false
+        db.run(`UPDATE uploads SET state = 'active' WHERE id = ? AND state = 'paused'`, [id])
+        deps.queue?.resume(id)
+        c.wake?.()
+        c.wake = undefined
+        return
+      }
+      const [row] = db.all<{ path: string; destination_id: number }>(
+        `SELECT path, destination_id FROM uploads WHERE id = ? AND state = 'paused'`,
+        [id],
+      )
+      if (!row) return
+      const destination = withoutId(await deps.destinations.targetFor(row.destination_id))
+      if (!destination) return
+      db.run(`UPDATE uploads SET state = 'active' WHERE id = ?`, [id])
+      deps.queue?.resume(id)
+      void settle(id, control(id, row.path, destination))
+    },
+
+    /** Stops an Upload for good and aborts its multipart upload, so no Parts stay on the Destination (PRD U7). */
+    async cancel(id: string): Promise<void> {
+      const [row] = db.all<{ state: string; key: string | null; destination_id: number }>(
+        'SELECT state, key, destination_id FROM uploads WHERE id = ?',
+        [id],
+      )
+      if (!row || (row.state !== 'active' && row.state !== 'paused')) return
+      const c = controls.get(id)
+      if (c) c.cancelled = true
+      db.run(`UPDATE uploads SET state = 'cancelled', finished_at = ? WHERE id = ?`, [new Date().toISOString(), id])
+      deps.queue?.cancel(id)
+      if (c?.running || row.key) {
+        const destination = c?.destination ?? withoutId(await deps.destinations.targetFor(row.destination_id))
+        if (destination) await engine.cancel({ id, destination, key: row.key ?? undefined })
+      }
+      c?.wake?.()
+    },
+
+    async pauseAll(): Promise<void> {
+      await Promise.all([...controls.keys()].map((id) => uploads.pause(id)))
+    },
+
+    async resumeAll(): Promise<void> {
+      const rows = db.all<{ id: string }>(`SELECT id FROM uploads WHERE state = 'paused' ORDER BY batch_id, position`)
+      await Promise.all(rows.map((r) => uploads.resume(r.id)))
     },
 
     /** The Engine started a multipart upload. A new upload ID makes the saved Parts of the old one useless. */
@@ -354,4 +482,12 @@ export function createUploads(deps: {
         }))
     },
   }
+  return uploads
+}
+
+/** A saved destination as the Engine gets it in a request. */
+function withoutId(target: UploadTarget | null): UploadRequest['destination'] | undefined {
+  if (!target) return undefined
+  const { destinationId: _, ...destination } = target
+  return destination
 }
