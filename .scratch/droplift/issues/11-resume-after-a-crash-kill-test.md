@@ -4,13 +4,13 @@
 
 **Blocked by:** 09 (Multipart upload for large files)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Kill the Engine during a multipart Upload: Host restarts it and the Upload continues from the last completed Part
+- [x] Kill the Engine during a multipart Upload: Host restarts it and the Upload continues from the last completed Part
 - [x] Kill the full app during a multipart Upload: on next launch the Upload continues from the last completed Part
-- [ ] Host stops restarting the Engine after 3 exits in one minute and shows an error
+- [x] Host stops restarting the Engine after 3 exits in one minute and shows an error
 - [x] Resumed objects are not corrupt (checksum matches)
-- [ ] Zero lost Uploads in the kill test
+- [x] Zero lost Uploads in the kill test
 
 ## Comments
 
@@ -41,3 +41,17 @@
 - The object was downloaded and its SHA-256 matches the source file (`8f9544a1…bbc1ec`).
 - Setup for this run: the default destination's account record gets `"profile":"r2"`, so the app uses `~/.aws/credentials` instead of the old Keychain keys. The Keychain keys are still there.
 - **Not checked yet:** kill of the Engine alone in the real app, the "Uploads stopped" notice after 3 exits, and zero lost Uploads with several files.
+
+**2026-10-14 · Engine kill and several-files tests** (real app, bucket `droplift-test`)
+
+- **Engine kill, upload 63.1** (`GS010002.mp4`, 20 Parts): SIGKILL to the Engine after 13 finished Parts. The Host started a new Engine, and the Upload continued. The 13 saved Parts kept their first `started_at`, so they were not sent again. State `done`, 0 retries, checksum `LHJ05Q==-20`.
+- **Engine kill, repeated** (uploads 64.1, 65.1, 67.1–71.1): app started from a shell so the Engine's stderr was captured; file dropped with `open -a`; SIGKILL to the Engine after 6–20 s (0 to 9 Parts finished). 7 of 7 runs: one restart, Upload `done`, checksum `LHJ05Q==-20` (the same object as the SHA-256 check of 2026-10-13), no Engine stderr.
+- **3 exits in 60 s:** three SIGKILLs to an idle Engine at 13:40:03, 13:40:16, and 13:40:28. After the first two, a new Engine started. After the third, no Engine started. The notice "Uploads stopped" was **not seen** (the test ran from a shell with nobody at the screen), so the criterion stays open.
+- **Several files, full-app kill** (batches 72 and 73): 5 random files (1, 6, 40, 90, 130 MiB), dropped together; SIGKILL to the app after 12 s (batch 72) and after 25 s (batch 73, the three multipart files had 4 saved Parts each). After relaunch: 5 of 5 rows `done` in each batch, 0 lost, 0 retries, no saved Part sent again. All 10 objects downloaded: SHA-256 matches the source files.
+- **Unexplained exit (seen one time):** in the first run of 2026-10-14, Engine 2 (started after the user's kill at 13:35:43) closed at 13:36:08 without a kill. With the kills at 13:35:43 and 13:36:17, this made 3 exits in 60 s, and the Host stopped as designed. Its stderr was lost because `open` started the app. 7 repro runs with stderr captured did not show it again. **Cause unknown.** If it comes back, the Engine's stderr must be kept (for example, written to a log file by the Host) to find the cause.
+- **Note:** an Engine started by `open` writes its stderr nowhere. Ticket 14 (error map) or a logging ticket should save it to a file.
+
+**2026-10-15 · resolved**
+
+- The user opened the app the normal way and killed the Engine 3 times within one minute. The macOS notice "Uploads stopped" appeared. All five criteria are now shown in the real app.
+- Open follow-ups: the unexplained Engine exit (seen one time, cause unknown), Engine stderr is not saved, and the risk of a kill between Complete and its reply (ticket 14).
